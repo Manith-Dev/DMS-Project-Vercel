@@ -1,3 +1,4 @@
+// server/index.js
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
@@ -12,20 +13,24 @@ import docsRouter from "./routes/docs.js";
 dotenv.config();
 const app = express();
 
+// Resolve the directory of this file (ESM-safe)
+const __dirname = path.dirname(new URL(import.meta.url).pathname);
+
 // middleware
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(
   cors({
-    origin: "http://localhost:5173", // adjust if client runs elsewhere
+    origin: "http://localhost:5173",
     credentials: false
   })
 );
 
-// static for uploaded PDFs
+// static for uploaded PDFs (absolute path from server folder)
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-app.use(`/${uploadDir}`, express.static(path.join(process.cwd(), uploadDir)));
+const absUploadDir = path.join(__dirname, uploadDir);
+if (!fs.existsSync(absUploadDir)) fs.mkdirSync(absUploadDir, { recursive: true });
+app.use(`/${uploadDir}`, express.static(absUploadDir));
 
 // connect Mongo
 await mongoose.connect(process.env.MONGO_URI);
@@ -33,7 +38,7 @@ await mongoose.connect(process.env.MONGO_URI);
 // health
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
-// ---------- /api/stats (DASHBOARD) ----------
+// ---------- /api/stats ----------
 app.get("/api/stats", async (_, res, next) => {
   try {
     const totalDocs = await Document.countDocuments();
@@ -55,9 +60,7 @@ app.get("/api/stats", async (_, res, next) => {
     ]);
 
     res.json({ totalDocs, receivedToday, withFiles, byType });
-  } catch (e) {
-    next(e);
-  }
+  } catch (e) { next(e); }
 });
 
 // docs CRUD

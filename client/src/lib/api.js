@@ -1,12 +1,13 @@
 // client/src/lib/api.js
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:5001";
 
-export async function searchDocs({ q="", type="", dateFrom="", dateTo="", page=1, limit=50 } = {}) {
+export async function searchDocs({ q="", type="", department="", date="", page=1, limit=50 } = {}) {
   const params = new URLSearchParams({ page, limit });
   if (q) params.set("q", q);
   if (type) params.set("type", type);
-  if (dateFrom) params.set("dateFrom", dateFrom);
-  if (dateTo) params.set("dateTo", dateTo);
+  if (department) params.set("department", department);
+  // single date -> use both from/to for backend compatibility
+  if (date) { params.set("dateFrom", date); params.set("dateTo", date); }
 
   const r = await fetch(`${BASE}/api/docs?` + params.toString());
   if (!r.ok) throw new Error("Failed to fetch");
@@ -15,7 +16,6 @@ export async function searchDocs({ q="", type="", dateFrom="", dateTo="", page=1
 
 export async function getStats() {
   const r = await fetch(`${BASE}/api/stats`);
-  // if you haven't implemented /api/stats, just return a default
   if (!r.ok) return { totalDocs: 0, receivedToday: 0, withFiles: 0, byType: [] };
   return r.json();
 }

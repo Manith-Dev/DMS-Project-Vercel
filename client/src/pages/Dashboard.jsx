@@ -3,8 +3,16 @@ import React from "react";
 import { useNavigate } from "react-router-dom";
 import { searchDocs, getStats, deleteDoc } from "../lib/api.js";
 import { ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
+import { departments } from "../data/options.js";
+import DatePicker from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
+import { format } from "date-fns";
 
+
+// Map stored values → Khmer labels (works for EN or KH stored values)
 const priorityToKh = { Low: "ធម្មតា", Normal: "ប្រញាប់", High: "បន្ទាន់" };
+
+// Colors for the donut
 const CHART_COLORS = [
   "#5B7CF7",
   "#34D399",
@@ -14,17 +22,17 @@ const CHART_COLORS = [
   "#A855F7",
 ];
 
+// strict MM/DD/YYYY formatter
 function formatDate(dateString) {
-  if (!dateString) return "-";
-  const d = new Date(dateString);
-  if (isNaN(d)) return "-";
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  return `${mm}/${dd}/${yyyy}`;
+  if (!dateString) return "";
+  try {
+    return format(new Date(dateString), "dd/MM/yyyy"); // ✅ day/month/year
+  } catch {
+    return "";
+  }
 }
 
-// Fix legacy garbled names from old uploads (latin1 shown as utf8)
+// Fix legacy garbled names (latin1 shown as utf8 from older uploads)
 function fixLegacyName(name) {
   try {
     const decoded = decodeURIComponent(escape(String(name)));
@@ -34,7 +42,7 @@ function fixLegacyName(name) {
   }
 }
 
-// Truncate base name to max chars (keep extension)
+// Truncate base name to N chars, keep extension
 function truncateFileName(name, max = 10) {
   if (!name) return "PDF";
   const dot = name.lastIndexOf(".");
@@ -47,11 +55,13 @@ function truncateFileName(name, max = 10) {
 export default function Dashboard() {
   const nav = useNavigate();
 
+  // filters (auto-search)
   const [q, setQ] = React.useState("");
   const [type, setType] = React.useState("");
-  const [dateFrom, setDateFrom] = React.useState("");
-  const [dateTo, setDateTo] = React.useState("");
+  const [dept, setDept] = React.useState("");
+  const [date, setDate] = React.useState("");
 
+  // data
   const [items, setItems] = React.useState([]);
   const [loading, setLoading] = React.useState(false);
   const [stats, setStats] = React.useState(null);
@@ -64,11 +74,18 @@ export default function Dashboard() {
     }));
   }, [stats]);
 
-  async function load() {
+  async function load(current = {}) {
     setLoading(true);
     try {
       const [{ items: list }, s] = await Promise.all([
-        searchDocs({ q, type, dateFrom, dateTo, page: 1, limit: 50 }),
+        searchDocs({
+          q: current.q ?? q,
+          type: current.type ?? type,
+          department: current.dept ?? dept,
+          date: current.date ?? date,
+          page: 1,
+          limit: 50,
+        }),
         getStats(),
       ]);
       setItems(list || []);
@@ -78,14 +95,19 @@ export default function Dashboard() {
     }
   }
 
+  // initial load
   React.useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function onSearch(e) {
-    e.preventDefault();
-    await load();
-  }
+  // auto-search on input (debounce 400ms)
+  React.useEffect(() => {
+    const h = setTimeout(() => {
+      load({ q, type, dept, date });
+    }, 400);
+    return () => clearTimeout(h);
+  }, [q, type, dept, date]); // re-run whenever these change
 
   async function onDelete(id) {
     if (!confirm("លុបឯកសារនេះ?")) return;
@@ -93,37 +115,35 @@ export default function Dashboard() {
     await load();
   }
 
-  // Robust download: GET blob, then save. Fallback to static path on error.
   async function downloadFile(docId, index, filename, directPath) {
     const base = import.meta.env.VITE_API_URL || "http://localhost:5001";
-    const url = `${base}/api/docs/${docId}/files/${index}/download`;
+    // cache buster to avoid any proxy/cdn caching weirdness
+    const url = `${base}/api/docs/${docId}/files/${index}/download?t=${Date.now()}`;
     try {
-      const r = await fetch(url);
+      const r = await fetch(url, { method: "GET" });
       if (!r.ok) {
-        // try to read JSON error for debugging
-        let msg = "Download failed";
-        try {
-          const j = await r.json();
-          if (j?.error) msg = j.error;
-        } catch {}
-        throw new Error(msg);
+        const text = await r.text().catch(() => "");
+        throw new Error(text || `HTTP ${r.status}`);
       }
       const blob = await r.blob();
+      // Safari/Edge sometimes need an explicit type for correct app association
+      const pdfBlob = blob.type
+        ? blob
+        : new Blob([blob], { type: "application/pdf" });
+
       const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
+      a.href = URL.createObjectURL(pdfBlob);
       a.download = filename || "file.pdf";
       document.body.appendChild(a);
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 0);
     } catch (e) {
-      // fallback: open static file path
+      // Fallback: open static path if present (served from /uploads)
       if (directPath) {
-        window.open(
+        window.location.href =
           (import.meta.env.VITE_API_URL || "http://localhost:5001") +
-            directPath,
-          "_self"
-        );
+          directPath;
       } else {
         alert(e.message || "Download failed");
       }
@@ -132,19 +152,21 @@ export default function Dashboard() {
 
   return (
     <div className="grid gap-6">
-      {/* Header */}
+      {/* Header (button removed per request) */}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">ឯកសារថ្មីៗ</h1>
       </div>
 
-      {/* Stats + Chart */}
+      {/* Stats (smaller) + Big Chart (spans 2 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         <StatCard label="ឯកសារទាំងអស់" value={stats?.totalDocs ?? 0} />
         <StatCard label="ទទួលបានថ្ងៃនេះ" value={stats?.receivedToday ?? 0} />
         <StatCard label="មានឯកសារ PDF" value={stats?.withFiles ?? 0} />
 
+        {/* Big donut card (2 columns on lg+) */}
         <div className="card p-4 overflow-hidden lg:col-span-2">
           <div className="flex items-center gap-6">
+            {/* Donut on the left */}
             <div className="w-48 h-48">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
@@ -170,6 +192,7 @@ export default function Dashboard() {
               </ResponsiveContainer>
             </div>
 
+            {/* Clean legend at right: "label = value" */}
             <ul className="text-sm grid gap-2">
               {chartData.length === 0 && (
                 <li className="text-slate-500">គ្មានទិន្នន័យ</li>
@@ -192,8 +215,8 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Filters */}
-      <form onSubmit={onSearch} className="card p-4 grid md:grid-cols-4 gap-3">
+      {/* Filters: Search, Type, Department, Date (single) */}
+      <div className="card p-4 grid md:grid-cols-4 gap-3">
         <div className="grid gap-1">
           <label className="text-sm text-slate-600">ស្វែងរក</label>
           <input
@@ -224,25 +247,32 @@ export default function Dashboard() {
         </div>
 
         <div className="grid gap-1">
-          <label className="text-sm text-slate-600">ចាប់ពីកាលបរិច្ឆេទ</label>
-          <input
-            type="date"
+          <label className="text-sm text-slate-600">នាយកដ្ឋាន</label>
+          <select
             className="input"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-          />
+            value={dept}
+            onChange={(e) => setDept(e.target.value)}
+          >
+            <option value="">ទាំងអស់</option>
+            {departments.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="grid gap-1">
-          <label className="text-sm text-slate-600">ដល់កាលបរិច្ឆេទ</label>
-          <input
-            type="date"
+          <label className="text-sm text-slate-600">កាលបរិច្ឆេទ</label>
+          <DatePicker
+            selected={date ? new Date(date) : null}
+            onChange={(d) => setDate(d ? d.toISOString().slice(0, 10) : "")}
+            dateFormat="dd/MM/yyyy"
+            placeholderText="ថ្ងៃ/ខែ/ឆ្នាំ"
             className="input"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
           />
         </div>
-      </form>
+      </div>
 
       {/* Table */}
       <div className="card overflow-x-auto">
@@ -265,22 +295,18 @@ export default function Dashboard() {
                   colSpan={7}
                   className="px-4 py-8 text-center text-slate-500"
                 >
-                  គ្មានទិន្នន័យ
+                  {loading ? "កំពុងផ្ទុក…" : "គ្មានទិន្នន័យ"}
                 </td>
               </tr>
             )}
 
             {items.map((it) => {
-              const f0 =
-                Array.isArray(it.files) && it.files.length > 0
-                  ? it.files[0]
-                  : null;
-              const fullName = f0
+              const hasFile = Array.isArray(it.files) && it.files.length > 0;
+              const f0 = hasFile ? it.files[0] : null;
+              const fullName = hasFile
                 ? fixLegacyName(f0.originalName || "PDF")
                 : null;
-              const shortName = fullName
-                ? truncateFileName(fullName, 10)
-                : null;
+              const shortName = hasFile ? truncateFileName(fullName, 10) : null;
 
               return (
                 <tr key={it._id} className="border-t">
@@ -299,7 +325,7 @@ export default function Dashboard() {
                   </td>
 
                   <td className="px-4 py-2">
-                    {f0 ? (
+                    {hasFile ? (
                       <a
                         className="text-indigo-600 hover:underline max-w-[24ch] inline-block truncate"
                         href="#"
@@ -317,20 +343,18 @@ export default function Dashboard() {
                   </td>
 
                   <td className="px-4 py-2 flex items-center gap-2">
-                    <td className="px-4 py-2 flex items-center gap-2">
-                      <button
-                        className="btn-secondary px-2 py-1"
-                        onClick={() => nav(`/edit/${it._id}`)}
-                      >
-                        កែ
-                      </button>
-                      <button
-                        className="btn-danger px-2 py-1"
-                        onClick={() => onDelete(it._id)}
-                      >
-                        លុប
-                      </button>
-                    </td>
+                    <button
+                      className="btn-secondary px-2 py-1"
+                      onClick={() => nav(`/edit/${it._id}`)}
+                    >
+                      កែ
+                    </button>
+                    <button
+                      className="btn-danger px-2 py-1"
+                      onClick={() => onDelete(it._id)}
+                    >
+                      លុប
+                    </button>
                   </td>
                 </tr>
               );
@@ -346,9 +370,11 @@ export default function Dashboard() {
 function StatCard({ label, value }) {
   return (
     <div className="card relative h-28">
+      {/* small label */}
       <div className="absolute top-3 left-4 text-sm text-slate-600">
         {label}
       </div>
+      {/* centered big number */}
       <div className="h-full w-full flex items-center justify-center">
         <div className="text-3xl md:text-4xl font-semibold leading-none">
           {value ?? 0}
@@ -358,11 +384,9 @@ function StatCard({ label, value }) {
   );
 }
 
+// Khmer priority badge with colors
 function PriorityBadge({ value }) {
-  const kh =
-    { Low: "ធម្មតា", Normal: "ប្រញាប់", High: "បន្ទាន់" }[value] ??
-    value ??
-    "-";
+  const kh = priorityToKh[value] ?? value ?? "-";
   let cls = "bg-slate-100 text-slate-800";
   if (value === "Normal" || value === "ប្រញាប់")
     cls = "bg-amber-100 text-amber-800";

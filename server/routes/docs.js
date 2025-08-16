@@ -1,4 +1,3 @@
-// server/routes/docs.js
 import express from "express";
 import multer from "multer";
 import fs from "fs";
@@ -10,10 +9,11 @@ import { uniqueSafeName } from "../utils/filenames.js";
 
 const router = express.Router();
 
+
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-// latin1 → utf8 (fix Khmer names from multer)
+// latin1 → utf8 for correct Khmer filenames
 const decodeLatin1 = (s) => Buffer.from(String(s), "latin1").toString("utf8");
 
 const storage = multer.diskStorage({
@@ -30,7 +30,7 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }
 });
 
-// ----------- CREATE -----------
+// CREATE
 router.post("/",
   upload.array("files", 12),
   body("date").notEmpty(),
@@ -67,10 +67,19 @@ router.post("/",
   }
 );
 
-// ----------- READ LIST -----------
+// LIST (supports q, type, department, dateFrom/dateTo)
 router.get("/", async (req, res, next) => {
   try {
-    const { q = "", page = 1, limit = 20, type = "", dateFrom = "", dateTo = "" } = req.query;
+    const {
+      q = "",
+      page = 1,
+      limit = 20,
+      type = "",
+      department = "",
+      dateFrom = "",
+      dateTo = ""
+    } = req.query;
+
     const filter = {};
 
     if (q) {
@@ -81,10 +90,12 @@ router.get("/", async (req, res, next) => {
       ];
     }
     if (type) filter.documentType = type;
+    if (department) filter.department = department;
+
     if (dateFrom || dateTo) {
       filter.date = {};
       if (dateFrom) filter.date.$gte = new Date(dateFrom);
-      if (dateTo) { const d = new Date(dateTo); d.setHours(23,59,59,999); filter.date.$lte = d; }
+      if (dateTo)  { const d = new Date(dateTo); d.setHours(23,59,59,999); filter.date.$lte = d; }
     }
 
     const items = await Document.find(filter)
@@ -98,7 +109,7 @@ router.get("/", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// ----------- READ ONE -----------
+// READ ONE
 router.get("/:id", async (req, res, next) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
@@ -110,7 +121,7 @@ router.get("/:id", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// ----------- UPDATE -----------
+// UPDATE
 router.put("/:id",
   upload.array("files", 12),
   body("date").notEmpty(),
@@ -155,7 +166,7 @@ router.put("/:id",
   }
 );
 
-// ----------- DELETE -----------
+// DELETE
 router.delete("/:id", async (req, res, next) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
@@ -183,17 +194,25 @@ router.get("/:id/files/:index/download", async (req, res, next) => {
     }
 
     const f = doc.files[i];
-    const rel = String(f.path || "").replace(/^\//, "");
-    const abs = path.join(process.cwd(), rel);
 
-    const name = f.originalName || path.basename(abs);
-    res.setHeader("Content-Type", "application/pdf");
-    // expose header in case client wants to read it
+    // Build absolute path from server folder
+    const __dirname = path.dirname(new URL(import.meta.url).pathname);
+    const rel = String(f.path || "").replace(/^\//, ""); // remove leading slash
+    const abs = path.join(__dirname, "..", rel); // ../uploads/filename.pdf
+
+    if (!fs.existsSync(abs)) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    // Expose header for CORS and force download
     res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
-    // RFC 5987 to support UTF-8 names
-    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
-    return res.sendFile(abs);
-  } catch (e) { next(e); }
+    return res.download(abs, f.originalName || path.basename(abs));
+  } catch (e) {
+    next(e);
+  }
 });
 
 export default router;
+
+
+

@@ -1,8 +1,11 @@
 // client/src/pages/NewDocument.jsx
 import React from "react";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import DatePicker from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
+
 import Dropzone from "../components/Dropzone.jsx";
 import { createDoc } from "../lib/api.js";
 import { documentTypes, departments, prioritiesKh } from "../data/options.js";
@@ -25,6 +28,7 @@ export default function NewDocument() {
     handleSubmit,
     formState: { errors },
     reset,
+    control,
   } = useForm({ resolver: zodResolver(schema) });
 
   const [files, setFiles] = React.useState([]);
@@ -48,7 +52,20 @@ export default function NewDocument() {
 
       <div className="grid md:grid-cols-2 gap-4">
         <Field label="កាលបរិច្ឆេទ">
-          <input type="date" className="input" {...register("date")} />
+          {/* Date as ថ្ងៃ/ខែ/ឆ្នាំ but stored as YYYY-MM-DD */}
+          <Controller
+            name="date"
+            control={control}
+            render={({ field }) => (
+              <DatePicker
+                selected={field.value ? new Date(field.value) : null}
+                onChange={(d) => field.onChange(d ? d.toISOString().slice(0, 10) : "")}
+                dateFormat="dd/MM/yyyy"
+                placeholderText="ថ្ងៃ/ខែ/ឆ្នាំ"
+                className="input"
+              />
+            )}
+          />
           <Error msg={errors.date?.message} />
         </Field>
 
