@@ -2,6 +2,7 @@
 import express from "express";
 import multer from "multer";
 import fs from "fs";
+import path from "path";
 import mongoose from "mongoose";
 import { body, validationResult } from "express-validator";
 import Document from "../models/Document.js";
@@ -12,9 +13,15 @@ const router = express.Router();
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
+// latin1 → utf8 (fix Khmer names from multer)
+const decodeLatin1 = (s) => Buffer.from(String(s), "latin1").toString("utf8");
+
 const storage = multer.diskStorage({
   destination: (_, __, cb) => cb(null, uploadDir),
-  filename: (_, file, cb) => cb(null, uniqueSafeName(uploadDir, file.originalname))
+  filename: (_, file, cb) => {
+    const decoded = decodeLatin1(file.originalname);
+    cb(null, uniqueSafeName(uploadDir, decoded));
+  }
 });
 const upload = multer({
   storage,
@@ -49,7 +56,7 @@ router.post("/",
         confidential: req.body.confidential === "true" || req.body.confidential === true,
         documentType: req.body.documentType,
         files: (req.files || []).map(f => ({
-          originalName: f.originalname,
+          originalName: decodeLatin1(f.originalname),
           path: `/${uploadDir}/${f.filename}`,
           size: f.size
         }))
@@ -103,9 +110,9 @@ router.get("/:id", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// ----------- UPDATE (FIX) -----------
+// ----------- UPDATE -----------
 router.put("/:id",
-  upload.array("files", 12), // optional new PDFs to append
+  upload.array("files", 12),
   body("date").notEmpty(),
   body("organization").notEmpty(),
   body("subject").notEmpty(),
@@ -121,7 +128,6 @@ router.put("/:id",
       const existing = await Document.findById(id);
       if (!existing) return res.status(404).json({ error: "Not found" });
 
-      // Update fields
       existing.date = req.body.date;
       existing.organization = req.body.organization;
       existing.subject = req.body.subject;
@@ -136,15 +142,12 @@ router.put("/:id",
       existing.documentType = req.body.documentType ?? existing.documentType;
       existing.confidential = req.body.confidential === "true" || req.body.confidential === true;
 
-      // Append new files (keep old files)
       const newFiles = (req.files || []).map(f => ({
-        originalName: f.originalname,
+        originalName: decodeLatin1(f.originalname),
         path: `/${uploadDir}/${f.filename}`,
         size: f.size
       }));
-      if (newFiles.length) {
-        existing.files.push(...newFiles);
-      }
+      if (newFiles.length) existing.files.push(...newFiles);
 
       const saved = await existing.save();
       res.json(saved);
@@ -161,6 +164,35 @@ router.delete("/:id", async (req, res, next) => {
     const r = await Document.findByIdAndDelete(req.params.id);
     if (!r) return res.status(404).json({ error: "Not found" });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ----------- DOWNLOAD FILE -----------
+router.get("/:id/files/:index/download", async (req, res, next) => {
+  try {
+    const { id, index } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+    const doc = await Document.findById(id).lean();
+    if (!doc) return res.status(404).json({ error: "Not found" });
+
+    const i = Number(index);
+    if (!Number.isInteger(i) || i < 0 || i >= (doc.files?.length || 0)) {
+      return res.status(400).json({ error: "Invalid file index" });
+    }
+
+    const f = doc.files[i];
+    const rel = String(f.path || "").replace(/^\//, "");
+    const abs = path.join(process.cwd(), rel);
+
+    const name = f.originalName || path.basename(abs);
+    res.setHeader("Content-Type", "application/pdf");
+    // expose header in case client wants to read it
+    res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
+    // RFC 5987 to support UTF-8 names
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
+    return res.sendFile(abs);
   } catch (e) { next(e); }
 });
 
