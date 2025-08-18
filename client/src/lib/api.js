@@ -1,11 +1,22 @@
 // client/src/lib/api.js
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:5001";
 
-export async function searchDocs({ q="", type="", department="", date="", page=1, limit=50 } = {}) {
+export async function searchDocs({
+  q = "",
+  type = "",
+  department = "",
+  date = "",
+  stage = "",
+  sourceType = "",
+  page = 1,
+  limit = 50,
+} = {}) {
   const params = new URLSearchParams({ page, limit });
   if (q) params.set("q", q);
   if (type) params.set("type", type);
   if (department) params.set("department", department);
+  if (stage) params.set("stage", stage);
+  if (sourceType) params.set("sourceType", sourceType);
   // single date -> use both from/to for backend compatibility
   if (date) { params.set("dateFrom", date); params.set("dateTo", date); }
 
@@ -26,24 +37,24 @@ export async function getDoc(id) {
   return r.json();
 }
 
-export async function createDoc(values, files=[]) {
+export async function createDoc(values, files = []) {
   const fd = new FormData();
   Object.entries(values).forEach(([k, v]) => {
     if (v !== undefined && v !== null) fd.append(k, v);
   });
-  (files || []).forEach(f => fd.append("files", f));
+  (files || []).forEach((f) => fd.append("files", f));
 
   const r = await fetch(`${BASE}/api/docs`, { method: "POST", body: fd });
   if (!r.ok) throw new Error("Create failed");
   return r.json();
 }
 
-export async function updateDoc(id, values, files=[]) {
+export async function updateDoc(id, values, files = []) {
   const fd = new FormData();
   Object.entries(values).forEach(([k, v]) => {
     if (v !== undefined && v !== null) fd.append(k, v);
   });
-  (files || []).forEach(f => fd.append("files", f));
+  (files || []).forEach((f) => fd.append("files", f));
 
   const r = await fetch(`${BASE}/api/docs/${id}`, { method: "PUT", body: fd });
   if (!r.ok) throw new Error("Update failed");
@@ -55,3 +66,29 @@ export async function deleteDoc(id) {
   if (!r.ok) throw new Error("Delete failed");
   return r.json();
 }
+
+export async function setStage(id, { stage, note = "" }) {
+  const token = localStorage.getItem("token") || "";
+  const r = await fetch(`${BASE}/api/docs/${id}/stage`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ stage, note }),
+  });
+  if (!r.ok) {
+    let msg = "Failed to update stage";
+    try { const j = await r.json(); if (j?.error) msg = j.error; } catch {}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+
+export async function getJourney(id) {
+  const BASE = import.meta.env.VITE_API_URL || "http://localhost:5001";
+  const r = await fetch(`${BASE}/api/docs/${id}/journey`);
+  if (!r.ok) throw new Error("Failed to fetch journey");
+  return r.json();
+}
+

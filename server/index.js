@@ -6,9 +6,9 @@ import morgan from "morgan";
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
-
 import Document from "./models/Document.js";
 import docsRouter from "./routes/docs.js";
+import { loginHandler } from "./Auth/auth.js";
 
 dotenv.config();
 const app = express();
