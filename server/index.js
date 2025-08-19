@@ -6,6 +6,7 @@ import morgan from "morgan";
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import Document from "./models/Document.js";
 import docsRouter from "./routes/docs.js";
 import { loginHandler } from "./Auth/auth.js";
@@ -14,11 +15,12 @@ dotenv.config();
 const app = express();
 
 // Resolve the directory of this file (ESM-safe)
-const __dirname = path.dirname(new URL(import.meta.url).pathname);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // middleware
 app.use(morgan("dev"));
-app.use(express.json());
+app.use(express.json());   // ✅ fixed here
 app.use(
   cors({
     origin: "http://localhost:5173",
@@ -74,3 +76,4 @@ app.use((err, req, res, _next) => {
 
 const port = process.env.PORT || 5001;
 app.listen(port, () => console.log(`API on http://localhost:${port}`));
+  

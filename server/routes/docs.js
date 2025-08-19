@@ -1,373 +1,304 @@
 // server/routes/docs.js
-import express from "express";
+import { Router } from "express";
 import multer from "multer";
 import fs from "fs";
 import path from "path";
-import mongoose from "mongoose";
-import { body, validationResult } from "express-validator";
+import { fileURLToPath } from "url";
 import Document from "../models/Document.js";
 import { uniqueSafeName } from "../utils/filenames.js";
-// import { requireAuth } from "../Auth/auth.js"; // keep for later auth
 
-const router = express.Router();
+const router = Router();
+
+// ---------- Windows-safe paths ----------
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const serverRoot = path.resolve(__dirname, "..");
 
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const absUploadDir = path.isAbsolute(uploadDir)
+  ? uploadDir
+  : path.resolve(serverRoot, uploadDir);
 
-// latin1 → utf8 (Khmer filename safety)
-const decodeLatin1 = (s) => Buffer.from(String(s), "latin1").toString("utf8");
+fs.mkdirSync(absUploadDir, { recursive: true });
+const webPrefix = `/${path.basename(uploadDir)}`;
 
+// ---------- Multer ----------
 const storage = multer.diskStorage({
-  destination: (_, __, cb) => cb(null, uploadDir),
-  filename: (_, file, cb) => {
-    const decoded = decodeLatin1(file.originalname);
-    cb(null, uniqueSafeName(uploadDir, decoded));
-  },
+  destination: (_req, _file, cb) => cb(null, absUploadDir),
+  filename: (_req, file, cb) => cb(null, uniqueSafeName(absUploadDir, file.originalname)),
 });
 const upload = multer({
   storage,
-  fileFilter: (_, file, cb) =>
+  limits: { fileSize: 50 * 1024 * 1024, files: 12 },
+  fileFilter: (_req, file, cb) =>
     file.mimetype === "application/pdf" ? cb(null, true) : cb(new Error("PDF files only")),
-  limits: { fileSize: 50 * 1024 * 1024 },
 });
+const mapFiles = (files = []) =>
+  files.map((f) => ({
+    originalName: f.originalname,
+    filename: f.filename,
+    mimetype: f.mimetype,
+    size: f.size,
+    path: `${webPrefix}/${f.filename}`.replace(/\\/g, "/"),
+  }));
 
-/* ---------------- CREATE ---------------- */
-router.post(
-  "/",
-  upload.array("files", 12),
-  body("date").notEmpty(),
-  body("organization").notEmpty(),
-  body("subject").notEmpty(),
-  async (req, res, next) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
-      const doc = await Document.create({
-        // core
-        date: req.body.date,
-        organization: req.body.organization,
-        subject: req.body.subject,
-        summary: req.body.summary,
-        remarks: req.body.remarks,
-        category: req.body.category,
-        sector: req.body.sector,
-        department: req.body.department,
-        province: req.body.province,
-        district: req.body.district,
-        priority: req.body.priority,
-        confidential: req.body.confidential === "true" || req.body.confidential === true,
-        documentType: req.body.documentType,
-        files: (req.files || []).map((f) => ({
-          originalName: decodeLatin1(f.originalname),
-          path: `/${uploadDir}/${f.filename}`,
-          size: f.size,
-        })),
-
-        // source
-        sourceType: req.body.sourceType,
-
-        // 3-step routing
-        fromDept: req.body.fromDept,
-        sentDate: req.body.sentDate,
-
-        receivedAt: req.body.receivedAt,
-        receivedDate: req.body.receivedDate,
-
-        toDept: req.body.toDept,
-        forwardedDate: req.body.forwardedDate,
-
-        routeNote: req.body.routeNote,
-      });
-
-      // Optional: if outgoing & toDept provided, set stage + history now
-      if (doc.sourceType === "outgoing" && doc.toDept) {
-        doc.stage = doc.toDept;
-        doc.history = doc.history || [];
-        doc.history.push({
-          stage: doc.toDept,
-          at: new Date(),
-          note: doc.routeNote || "Dispatched",
-          actorRole: "system",
-          actorDept: doc.fromDept || "នាយកដ្ឋានរដ្ឋបាលសរុប",
-        });
-        await doc.save();
-      }
-
-      res.status(201).json(doc);
-    } catch (e) {
-      next(e);
-    }
+// ---------- History helpers (strong de-dupe) ----------
+const floorToMinute = (d) => {
+  const x = new Date(d);
+  x.setSeconds(0, 0);
+  return +x;
+};
+const normalizedStep = ({ stage, at, note }) => ({
+  stage,
+  at: at ? new Date(at) : new Date(),
+  note: note || "",
+  actorRole: "system",
+  actorDept: stage,
+});
+function pushDedupe(historyArr, step) {
+  const arr = Array.isArray(historyArr) ? historyArr : [];
+  const keyStage = (step.stage || "").trim();
+  const keyAt = floorToMinute(step.at);
+  const idx = arr.findIndex(
+    (h) => (h.stage || "").trim() === keyStage && floorToMinute(h.at) === keyAt
+  );
+  if (idx >= 0) {
+    if (!arr[idx].note && step.note) arr[idx].note = step.note; // merge note
+    return arr;
   }
-);
+  arr.push(step);
+  return arr;
+}
 
-/* ---------------- LIST ---------------- */
+// ---------- LIST ----------
 router.get("/", async (req, res, next) => {
   try {
     const {
       q = "",
-      page = 1,
-      limit = 20,
       type = "",
       department = "",
-      stage = "",
-      sourceType = "",
+      date = "",
       dateFrom = "",
       dateTo = "",
+      stage = "",
+      sourceType = "",
+      page = "1",
+      limit = "10",
     } = req.query;
 
-    const filter = {};
+    const p = Math.max(parseInt(page, 10) || 1, 1);
+    const l = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
 
-    if (q) {
-      filter.$or = [
-        { organization: new RegExp(q, "i") },
-        { subject: new RegExp(q, "i") },
-        { summary: new RegExp(q, "i") },
-      ];
-    }
+    const filter = {};
     if (type) filter.documentType = type;
     if (department) filter.department = department;
-    if (stage) filter.stage = stage;
     if (sourceType) filter.sourceType = sourceType;
+    if (stage) filter.stage = stage;
 
-    if (dateFrom || dateTo) {
-      filter.date = {};
-      if (dateFrom) filter.date.$gte = new Date(dateFrom);
-      if (dateTo) {
-        const d = new Date(dateTo);
-        d.setHours(23, 59, 59, 999);
-        filter.date.$lte = d;
-      }
+    const df = date || dateFrom;
+    const dt = date || dateTo;
+    if (df || dt) {
+      const start = df ? new Date(df) : new Date("1970-01-01");
+      const end = dt ? new Date(dt) : new Date("2999-12-31");
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
+      filter.date = { $gte: start, $lte: end };
     }
 
-    const items = await Document.find(filter)
-      .sort({ createdAt: -1 })
-      .skip((+page - 1) * +limit)
-      .limit(+limit)
-      .lean();
+    let query = Document.find(filter).sort({ createdAt: -1 });
+    if (q.trim()) {
+      query = Document.find({ $text: { $search: q.trim() }, ...filter })
+        .select({ score: { $meta: "textScore" } })
+        .sort({ score: { $meta: "textScore" }, createdAt: -1 });
+    }
 
-    const total = await Document.countDocuments(filter);
-    res.json({ items, total, page: +page, limit: +limit });
+    const [items, total] = await Promise.all([
+      query.skip((p - 1) * l).limit(l).lean(),
+      Document.countDocuments(q.trim() ? { $text: { $search: q.trim() }, ...filter } : filter),
+    ]);
+    res.json({ page: p, limit: l, total, items });
   } catch (e) {
     next(e);
   }
 });
 
-/* ---------------- READ ONE ---------------- */
+// ---------- JOURNEY (before "/:id") ----------
+router.get("/:id/journey", async (req, res, next) => {
+  try {
+    const doc = await Document.findById(req.params.id).lean();
+    if (!doc) return res.status(404).json({ error: "Document not found" });
+
+    // collapse duplicates by (stage, minute)
+    const byKey = new Map();
+    for (const h of doc.history || []) {
+      const key = `${(h.stage || "").trim()}|${floorToMinute(h.at)}`;
+      const prev = byKey.get(key);
+      if (!prev || (!prev.note && h.note)) byKey.set(key, h);
+    }
+    const items = [...byKey.values()].sort(
+      (a, b) => +new Date(a.at) - +new Date(b.at)
+    );
+
+    res.json({ items, history: items });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ---------- GET ONE ----------
 router.get("/:id", async (req, res, next) => {
   try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ error: "Invalid id" });
-    }
     const doc = await Document.findById(req.params.id).lean();
-    if (!doc) return res.status(404).json({ error: "Not found" });
+    if (!doc) return res.status(404).json({ error: "Document not found" });
     res.json(doc);
   } catch (e) {
     next(e);
   }
 });
 
-/* ---------------- UPDATE ---------------- */
-router.put(
-  "/:id",
-  upload.array("files", 12),
-  body("date").notEmpty(),
-  body("organization").notEmpty(),
-  body("subject").notEmpty(),
-  async (req, res, next) => {
-    try {
-      const { id } = req.params;
-      if (!mongoose.Types.ObjectId.isValid(id)) {
-        return res.status(400).json({ error: "Invalid id" });
-      }
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+// ---------- CREATE ----------
+router.post("/", upload.array("files"), async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const payload = {
+      date: b.date ? new Date(b.date) : new Date(),
+      organization: b.organization || "",
+      subject: b.subject || "",
+      summary: b.summary || "",
+      priority: b.priority || "Normal",
+      confidential: !!(b.confidential === "true" || b.confidential === true),
+      documentType: b.documentType || "",
+      sourceType: b.sourceType || "incoming",
 
-      const existing = await Document.findById(id);
-      if (!existing) return res.status(404).json({ error: "Not found" });
+      fromDept: b.fromDept || "",
+      sentDate: b.sentDate ? new Date(b.sentDate) : null,
 
-      // core
-      existing.date = req.body.date;
-      existing.organization = req.body.organization;
-      existing.subject = req.body.subject;
-      existing.summary = req.body.summary ?? existing.summary;
-      existing.remarks = req.body.remarks ?? existing.remarks;
-      existing.category = req.body.category ?? existing.category;
-      existing.sector = req.body.sector ?? existing.sector;
-      existing.department = req.body.department ?? existing.department;
-      existing.province = req.body.province ?? existing.province;
-      existing.district = req.body.district ?? existing.district;
-      existing.priority = req.body.priority ?? existing.priority;
-      existing.documentType = req.body.documentType ?? existing.documentType;
-      existing.confidential = req.body.confidential === "true" || req.body.confidential === true;
+      receivedAt: b.receivedAt || "",
+      receivedDate: b.receivedDate ? new Date(b.receivedDate) : null,
 
-      // source / 3-step fields
-      existing.sourceType = req.body.sourceType ?? existing.sourceType;
+      toDept: b.toDept || "",
+      forwardedDate: b.forwardedDate ? new Date(b.forwardedDate) : null,
 
-      existing.fromDept = req.body.fromDept ?? existing.fromDept;
-      existing.sentDate = req.body.sentDate ?? existing.sentDate;
+      routeNote: b.routeNote || "",
+      files: mapFiles(req.files),
+    };
 
-      existing.receivedAt = req.body.receivedAt ?? existing.receivedAt;
-      existing.receivedDate = req.body.receivedDate ?? existing.receivedDate;
+    const doc = new Document(payload);
 
-      existing.toDept = req.body.toDept ?? existing.toDept;
-      existing.forwardedDate = req.body.forwardedDate ?? existing.forwardedDate;
+    // seed history from provided steps (with strong de-dupe)
+    doc.history = [];
+    if (payload.fromDept)
+      doc.history = pushDedupe(
+        doc.history,
+        normalizedStep({ stage: payload.fromDept, at: payload.sentDate || payload.date, note: payload.routeNote })
+      );
+    if (payload.receivedAt)
+      doc.history = pushDedupe(
+        doc.history,
+        normalizedStep({ stage: payload.receivedAt, at: payload.receivedDate || payload.date, note: payload.routeNote })
+      );
+    if (payload.toDept)
+      doc.history = pushDedupe(
+        doc.history,
+        normalizedStep({ stage: payload.toDept, at: payload.forwardedDate || payload.date, note: payload.routeNote })
+      );
 
-      existing.routeNote = req.body.routeNote ?? existing.routeNote;
+    if (doc.history.length) doc.stage = doc.history[doc.history.length - 1].stage;
 
-      // files to append
-      const newFiles = (req.files || []).map((f) => ({
-        originalName: decodeLatin1(f.originalname),
-        path: `/${uploadDir}/${f.filename}`,
-        size: f.size,
-      }));
-      if (newFiles.length) existing.files.push(...newFiles);
-
-      const saved = await existing.save();
-      res.json(saved);
-    } catch (e) {
-      next(e);
-    }
+    await doc.save();
+    res.status(201).json(doc);
+  } catch (e) {
+    next(e);
   }
-);
+});
 
-/* ---------------- DELETE ---------------- */
+// ---------- UPDATE (meta & add files) ----------
+router.put("/:id", upload.array("files"), async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const doc = await Document.findById(req.params.id);
+    if (!doc) return res.status(404).json({ error: "Document not found" });
+
+    const set = (k, v) => { if (v !== undefined) doc[k] = v; };
+    set("date", b.date ? new Date(b.date) : doc.date);
+    set("organization", b.organization);
+    set("subject", b.subject);
+    set("summary", b.summary);
+    set("priority", b.priority);
+    set("confidential", b.confidential === "true" || b.confidential === true);
+    set("documentType", b.documentType);
+    set("sourceType", b.sourceType);
+
+    set("fromDept", b.fromDept);
+    set("sentDate", b.sentDate ? new Date(b.sentDate) : doc.sentDate);
+    set("receivedAt", b.receivedAt);
+    set("receivedDate", b.receivedDate ? new Date(b.receivedDate) : doc.receivedDate);
+    set("toDept", b.toDept);
+    set("forwardedDate", b.forwardedDate ? new Date(b.forwardedDate) : doc.forwardedDate);
+    set("routeNote", b.routeNote);
+
+    const newFiles = mapFiles(req.files);
+    if (newFiles.length) doc.files = (doc.files || []).concat(newFiles);
+
+    await doc.save();
+    res.json(doc);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ---------- DELETE ----------
 router.delete("/:id", async (req, res, next) => {
   try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ error: "Invalid id" });
-    }
-    const r = await Document.findByIdAndDelete(req.params.id);
-    if (!r) return res.status(404).json({ error: "Not found" });
+    const doc = await Document.findByIdAndDelete(req.params.id);
+    if (!doc) return res.status(404).json({ error: "Document not found" });
     res.json({ ok: true });
   } catch (e) {
     next(e);
   }
 });
 
-/* ---------------- DOWNLOAD FILE ---------------- */
+// ---------- DOWNLOAD ----------
 router.get("/:id/files/:index/download", async (req, res, next) => {
   try {
     const { id, index } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ error: "Invalid id" });
-    }
     const doc = await Document.findById(id).lean();
-    if (!doc) return res.status(404).json({ error: "Not found" });
-
-    const i = Number(index);
-    if (!Number.isInteger(i) || i < 0 || i >= (doc.files?.length || 0)) {
-      return res.status(400).json({ error: "Invalid file index" });
-    }
+    if (!doc) return res.status(404).json({ error: "Document not found" });
+    const i = parseInt(index, 10);
+    if (!Array.isArray(doc.files) || isNaN(i) || i < 0 || i >= doc.files.length)
+      return res.status(404).json({ error: "File not found" });
 
     const f = doc.files[i];
-    const __dirname = path.dirname(new URL(import.meta.url).pathname);
-    const rel = String(f.path || "").replace(/^\//, "");
-    const abs = path.join(__dirname, "..", rel);
+    const filename = f.filename || path.basename(f.path || "");
+    const fullpath = path.join(absUploadDir, filename);
+    if (!fs.existsSync(fullpath)) return res.status(404).json({ error: "File missing on server" });
 
-    if (!fs.existsSync(abs)) {
-      return res.status(404).json({ error: "File not found" });
-    }
-
-    res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
-    return res.download(abs, f.originalName || path.basename(abs));
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(f.originalName || filename)}"`);
+    fs.createReadStream(fullpath).pipe(res);
   } catch (e) {
     next(e);
   }
 });
 
-/* ---------------- STAGE UPDATE (kept for future auth) ---------------- */
-// For now you can comment requireAuth if not using auth yet
-router.put("/:id/stage", /* requireAuth, */ async (req, res, next) => {
+// ---------- MOVE STAGE (append to history with de-dupe) ----------
+router.put("/:id/stage", async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const { stage, note = "" } = req.body || {};
-    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid id" });
-    if (!stage) return res.status(400).json({ error: "stage required" });
+    const { stage, note, at } = req.body || {};
+    if (!stage) return res.status(400).json({ error: "stage is required" });
 
-    const doc = await Document.findById(id);
-    if (!doc) return res.status(404).json({ error: "Not found" });
+    const doc = await Document.findById(req.params.id);
+    if (!doc) return res.status(404).json({ error: "Document not found" });
 
-    const fromStage = doc.stage || "";
-    const toStage = stage;
-
-    if (fromStage !== toStage || note) {
-      doc.stage = toStage;
-      doc.history = doc.history || [];
-      doc.history.push({
-        stage: toStage,
-        at: new Date(),
-        note,
-        actorRole: "system",               // when auth is added, fill from req.user
-        actorDept: doc.fromDept || "នាយកដ្ឋានរដ្ឋបាលសរុប",
-      });
-    }
+    const step = normalizedStep({ stage, at, note });
+    doc.history = pushDedupe(doc.history, step);
+    doc.stage = stage;
 
     await doc.save();
-    res.json({ ok: true, stage: doc.stage, history: doc.history });
+    res.json(doc);
   } catch (e) {
     next(e);
   }
 });
-
-// GET /api/docs/:id/journey
-router.get("/:id/journey", async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ error: "Invalid id" });
-    }
-    const doc = await Document.findById(id).lean();
-    if (!doc) return res.status(404).json({ error: "Not found" });
-
-    // history is already chronological in your code, but sort just in case
-    const hist = Array.isArray(doc.history) ? [...doc.history].sort((a, b) =>
-      new Date(a.at) - new Date(b.at)
-    ) : [];
-
-    // build a friendly journey list
-    const journey = [];
-    // 0) created
-    journey.push({
-      type: "created",
-      stage: doc.stage || (hist[0]?.stage ?? ""),
-      note: doc.subject || "",
-      at: doc.createdAt || hist[0]?.at || doc.date,
-      actor: "system"
-    });
-
-    // 1) every history change becomes a step
-    for (const h of hist) {
-      journey.push({
-        type: "stageChanged",
-        stage: h.stage,
-        note: h.note || "",
-        at: h.at,
-        actor: h.actorDept ? `${h.actorDept} (${h.actorRole || "—"})` : (h.actorRole || "—")
-      });
-    }
-
-    // 2) completed (optional)
-    if (doc.status === "Completed" || doc.completedAt) {
-      journey.push({
-        type: "completed",
-        stage: doc.stage,
-        note: "បានបញ្ចប់",
-        at: doc.completedAt || hist[hist.length - 1]?.at || new Date(),
-        actor: "system"
-      });
-    }
-
-    res.json({
-      _id: doc._id,
-      subject: doc.subject,
-      date: doc.date,
-      currentStage: doc.stage,
-      status: doc.status || "InProgress",
-      journey
-    });
-  } catch (e) { next(e); }
-});
-
 
 export default router;

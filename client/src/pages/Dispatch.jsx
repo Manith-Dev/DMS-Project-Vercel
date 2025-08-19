@@ -52,7 +52,7 @@ export default function Dispatch() {
     summary: "",
     priority: "Normal",
 
-    fromDept: ADMIN,
+    fromDept: "",
     sentDate: "",
 
     receivedAt: "",
@@ -92,7 +92,7 @@ export default function Dispatch() {
       subject: "",
       summary: "",
       priority: "Normal",
-      fromDept: ADMIN,
+      fromDept: "",
       sentDate: "",
       receivedAt: "",
       receivedDate: "",
@@ -115,14 +115,14 @@ export default function Dispatch() {
 
     setSubmitting(true);
     try {
-      // Defaults (if dates left blank)
+      // Defaults if blank
       const sentDate = form.sentDate || form.date;
       const forwardedDate = form.forwardedDate || form.date;
 
-      // 1) Create
+      // 1) Create (this seeds history for any provided steps)
       const payload = {
         date: form.date,
-        organization: ADMIN,               // internal outgoing created by admin
+        organization: ADMIN,
         subject: form.subject,
         summary: form.summary,
         priority: form.priority,
@@ -144,9 +144,13 @@ export default function Dispatch() {
 
       const created = await createDoc(payload, files);
 
-      // 2) Move stage to destination immediately
-      if (form.toDept) {
-        await apiSetStage(created._id, { stage: form.toDept, note: form.note || "" });
+      // 2) Avoid double-writing: only call setStage if toDept was NOT set in create
+      if (!form.toDept) {
+        await apiSetStage(created._id, {
+          stage: form.toDept,
+          note: form.note || "",
+          at: forwardedDate || form.date,
+        });
       }
 
       setOpen(false);
@@ -299,10 +303,9 @@ export default function Dispatch() {
                   value={form.fromDept}
                   onChange={(e) => setForm((f) => ({ ...f, fromDept: e.target.value }))}
                 >
+                  <option value="">— ជ្រើសរើស —</option>
                   {ALL_DESTS.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
+                    <option key={d} value={d}>{d}</option>
                   ))}
                 </select>
                 <input
@@ -323,9 +326,7 @@ export default function Dispatch() {
                 >
                   <option value="">— ជ្រើសរើស —</option>
                   {ALL_DESTS.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
+                    <option key={d} value={d}>{d}</option>
                   ))}
                 </select>
                 <input
@@ -346,9 +347,7 @@ export default function Dispatch() {
                 >
                   <option value="">— ជ្រើសរើស —</option>
                   {ALL_DESTS.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
+                    <option key={d} value={d}>{d}</option>
                   ))}
                 </select>
                 <input
@@ -381,9 +380,7 @@ export default function Dispatch() {
                 onChange={(e) => setFiles(Array.from(e.target.files || []))}
               />
               {files.length > 0 && (
-                <div className="text-xs text-slate-600 mt-1">
-                  បានជ្រើស {files.length} ឯកសារ
-                </div>
+                <div className="text-xs text-slate-600 mt-1">បានជ្រើស {files.length} ឯកសារ</div>
               )}
             </label>
 
