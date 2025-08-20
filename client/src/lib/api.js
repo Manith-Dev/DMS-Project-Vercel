@@ -104,3 +104,7 @@ export async function getJourney(id) {
   if (Array.isArray(data.history)) return data.history;
   return [];
 }
+
+export async function getOutgoingStats() {
+  return getStats(); // same endpoint; now includes outgoing fields
+}

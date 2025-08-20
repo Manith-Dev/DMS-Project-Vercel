@@ -135,9 +135,6 @@ export default function Process() {
             មើលទីតាំងបច្ចុប្បន្ន និងប្ដូរដំណាក់កាលរវាង នាយកដ្ឋាន ⇄ {ADMIN_NAME}
           </p>
         </div>
-        <button className="btn-secondary px-3 py-2" onClick={clearFilters}>
-          សម្អាតតម្រង
-        </button>
       </div>
 
       {/* Filters */}

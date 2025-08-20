@@ -635,7 +635,7 @@ export default function Dashboard() {
               <th className="px-4 py-2 text-left">កាលបរិច្ឆេទ</th>
               <th className="px-4 py-2 text-left">អង្គភាព</th>
               <th className="px-4 py-2 text-left">ចំណងជើង</th>
-              <th className="px-4 py-2 text-left">នាយកដ្ឋាន</th>
+              <th className="px-4 py-2 text-left">បានទទួលពីនាយកដ្ឋាន</th>
               <th className="px-4 py-2 text-left">កម្រិត</th>
               <th className="px-4 py-2 text-left">ឯកសារ</th>
               <th className="px-4 py-2 text-left">សកម្មភាព</th>
