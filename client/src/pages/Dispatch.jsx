@@ -2,6 +2,8 @@
 import React from "react";
 import { searchDocs, createDoc, setStage as apiSetStage } from "../lib/api.js";
 import { departments as BASE_DEPARTMENTS } from "../data/options.js";
+import DatePicker from "react-datepicker";
+import "react-datepicker/dist/react-datepicker.css";
 
 const ADMIN = "នាយកដ្ឋានរដ្ឋបាលសរុប";
 const SPECIAL = [
@@ -13,6 +15,19 @@ const SPECIAL = [
 ];
 const ALL_DESTS = [ADMIN, ...BASE_DEPARTMENTS.filter((d) => d !== ADMIN), ...SPECIAL];
 
+/* ---- date helpers ---- */
+function toISODate(d) {
+  if (!d || isNaN(d)) return "";
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+function fromISODate(s) {
+  if (!s) return null;
+  const d = new Date(s);
+  return isNaN(d) ? null : d;
+}
 function formatDMY(s) {
   if (!s) return "—";
   const d = new Date(s);
@@ -23,6 +38,7 @@ function formatDMY(s) {
   return `${dd}/${mm}/${yyyy}`;
 }
 
+/* ---- small UI bits ---- */
 function SmallStep({ title, value, date }) {
   return (
     <div className="rounded-lg border p-2">
@@ -32,10 +48,119 @@ function SmallStep({ title, value, date }) {
     </div>
   );
 }
+function DateField({ valueISO, onChangeISO, placeholder = "ថ្ងៃ/ខែ/ឆ្នាំ", className = "input" }) {
+  return (
+    <DatePicker
+      selected={fromISODate(valueISO)}
+      onChange={(d) => onChangeISO(d ? toISODate(d) : "")}
+      dateFormat="dd/MM/yyyy"
+      placeholderText={placeholder}
+      className={className}
+    />
+  );
+}
+
+/* ---- PDF Dropzone component ---- */
+function PdfDropzone({ files, setFiles, inputRef }) {
+  const zoneRef = React.useRef(null);
+
+  function addFiles(list) {
+    const arr = Array.from(list || []);
+    const pdfs = arr.filter((f) => f.type === "application/pdf");
+    if (pdfs.length !== arr.length) {
+      alert("សូមជ្រើសឯកសារ PDF ប៉ុណ្ណោះ");
+    }
+    // merge (avoid duplicates by name+size+lastModified)
+    setFiles((prev) => {
+      const key = (f) => `${f.name}|${f.size}|${f.lastModified}`;
+      const seen = new Set(prev.map(key));
+      const merged = [...prev];
+      for (const f of pdfs) if (!seen.has(key(f))) merged.push(f);
+      return merged;
+    });
+  }
+
+  function onDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    zoneRef.current?.classList.remove("ring-2", "ring-indigo-400");
+    if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files);
+  }
+  function onDragOver(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    zoneRef.current?.classList.add("ring-2", "ring-indigo-400");
+  }
+  function onDragLeave(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    zoneRef.current?.classList.remove("ring-2", "ring-indigo-400");
+  }
+  function onClick() {
+    inputRef?.current?.click();
+  }
+  function onInputChange(e) {
+    addFiles(e.target.files);
+    // allow re-selecting same file(s)
+    e.target.value = "";
+  }
+  function removeAt(i) {
+    setFiles((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
+  return (
+    <div className="grid gap-2">
+      <span className="text-sm text-slate-600">ភ្ជាប់ PDF (ជាជម្រើស)</span>
+
+      <div
+        ref={zoneRef}
+        onClick={onClick}
+        onDrop={onDrop}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        className="cursor-pointer border-2 border-dashed rounded-xl p-8 text-center text-slate-600 bg-slate-50/60 hover:bg-slate-50"
+      >
+        <div className="text-[15px]">បញ្ចូលឯកសារ PDF នៅទីនេះ៖</div>
+        <div className="text-xs mt-1 text-slate-500">(ចុច ឬ ទាញដាក់)</div>
+      </div>
+
+      {/* hidden input that actually picks files */}
+      <input
+        ref={inputRef}
+        type="file"
+        accept="application/pdf"
+        multiple
+        className="hidden"
+        onChange={onInputChange}
+      />
+
+      {/* small file list (optional) */}
+      {files?.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {files.map((f, i) => (
+            <li
+              key={`${f.name}-${f.size}-${f.lastModified}-${i}`}
+              className="flex items-center justify-between rounded border bg-white px-3 py-2 text-sm"
+            >
+              <span className="truncate max-w-[70%]" title={f.name}>{f.name}</span>
+              <button
+                type="button"
+                className="btn-danger px-2 py-1"
+                onClick={() => removeAt(i)}
+              >
+                លុប
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 export default function Dispatch() {
   const [q, setQ] = React.useState("");
-  const [date, setDate] = React.useState("");
+  const [date, setDate] = React.useState(""); // ISO YYYY-MM-DD
   const [items, setItems] = React.useState([]);
   const [loading, setLoading] = React.useState(false);
 
@@ -45,7 +170,7 @@ export default function Dispatch() {
   const [files, setFiles] = React.useState([]);
   const fileInput = React.useRef(null);
 
-  // Form values (3 steps)
+  // Form values
   const [form, setForm] = React.useState({
     date: "",
     subject: "",
@@ -115,11 +240,9 @@ export default function Dispatch() {
 
     setSubmitting(true);
     try {
-      // Defaults if blank
       const sentDate = form.sentDate || form.date;
       const forwardedDate = form.forwardedDate || form.date;
 
-      // 1) Create (this seeds history for any provided steps)
       const payload = {
         date: form.date,
         organization: ADMIN,
@@ -144,7 +267,7 @@ export default function Dispatch() {
 
       const created = await createDoc(payload, files);
 
-      // 2) Avoid double-writing: only call setStage if toDept was NOT set in create
+      // Only call setStage if create didn't already place it at toDept
       if (!form.toDept) {
         await apiSetStage(created._id, {
           stage: form.toDept,
@@ -188,12 +311,7 @@ export default function Dispatch() {
         </label>
         <label className="grid gap-1">
           <span className="text-sm text-slate-600">កាលបរិច្ឆេទ</span>
-          <input
-            type="date"
-            className="input"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-          />
+          <DateField valueISO={date} onChangeISO={setDate} />
         </label>
         <div />
       </div>
@@ -267,11 +385,9 @@ export default function Dispatch() {
             <div className="grid md:grid-cols-2 gap-4">
               <label className="grid gap-1">
                 <span className="text-sm text-slate-600">កាលបរិច្ឆេទឯកសារ</span>
-                <input
-                  type="date"
-                  className="input"
-                  value={form.date}
-                  onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
+                <DateField
+                  valueISO={form.date}
+                  onChangeISO={(v) => setForm((f) => ({ ...f, date: v }))}
                 />
               </label>
               <label className="grid gap-1">
@@ -308,12 +424,10 @@ export default function Dispatch() {
                     <option key={d} value={d}>{d}</option>
                   ))}
                 </select>
-                <input
-                  type="date"
+                <DateField
+                  valueISO={form.sentDate}
+                  onChangeISO={(v) => setForm((f) => ({ ...f, sentDate: v }))}
                   className="input mt-2"
-                  value={form.sentDate}
-                  onChange={(e) => setForm((f) => ({ ...f, sentDate: e.target.value }))}
-                  placeholder="កាលបរិច្ឆេទបញ្ចូន"
                 />
               </label>
 
@@ -329,12 +443,10 @@ export default function Dispatch() {
                     <option key={d} value={d}>{d}</option>
                   ))}
                 </select>
-                <input
-                  type="date"
+                <DateField
+                  valueISO={form.receivedDate}
+                  onChangeISO={(v) => setForm((f) => ({ ...f, receivedDate: v }))}
                   className="input mt-2"
-                  value={form.receivedDate}
-                  onChange={(e) => setForm((f) => ({ ...f, receivedDate: e.target.value }))}
-                  placeholder="កាលបរិច្ឆេទទទួល"
                 />
               </label>
 
@@ -350,39 +462,15 @@ export default function Dispatch() {
                     <option key={d} value={d}>{d}</option>
                   ))}
                 </select>
-                <input
-                  type="date"
+                <DateField
+                  valueISO={form.forwardedDate}
+                  onChangeISO={(v) => setForm((f) => ({ ...f, forwardedDate: v }))}
                   className="input mt-2"
-                  value={form.forwardedDate}
-                  onChange={(e) => setForm((f) => ({ ...f, forwardedDate: e.target.value }))}
-                  placeholder="កាលបរិច្ឆេទបញ្ចូនបន្ត"
                 />
               </label>
             </div>
 
-            <label className="grid gap-1">
-              <span className="text-sm text-slate-600">កំណត់ចំណាំ (សម្រាប់ផ្លូវចរាចរ)</span>
-              <input
-                className="input"
-                value={form.note}
-                onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
-              />
-            </label>
-
-            <label className="grid gap-1">
-              <span className="text-sm text-slate-600">ភ្ជាប់ PDF (ជាជម្រើស)</span>
-              <input
-                ref={fileInput}
-                type="file"
-                accept="application/pdf"
-                multiple
-                className="input"
-                onChange={(e) => setFiles(Array.from(e.target.files || []))}
-              />
-              {files.length > 0 && (
-                <div className="text-xs text-slate-600 mt-1">បានជ្រើស {files.length} ឯកសារ</div>
-              )}
-            </label>
+            <PdfDropzone files={files} setFiles={setFiles} inputRef={fileInput} />
 
             <div className="flex items-center justify-end gap-3">
               <button type="submit" className="btn px-4 py-2" disabled={submitting}>

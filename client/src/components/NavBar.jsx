@@ -20,9 +20,9 @@ export default function NavBar(){
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
         <Link to="/" className="font-semibold text-lg tracking-tight">DMS</Link>
         <nav className="flex items-center gap-4 text-sm">
-          <Link to="/" className={active("/")}>ផ្ទាំងគ្រប់គ្រង</Link>
-          <Link to="/new" className={active("/new")}>បញ្ចូលឯកសារ</Link>
-            <Link to="/dispatch" className={active("/dispatch")}>បញ្ជូនឯកសារ</Link> {/* NEW */}
+          <Link to="/" className={active("/")}>ផ្ទាំងគ្រប់គ្រងឯកសារចូល</Link>
+          {/* <Link to="/new" className={active("/new")}>បញ្ចូលឯកសារ</Link> */}
+            <Link to="/dispatch" className={active("/dispatch")}>ផ្ទាំងគ្រប់គ្រងឯកសារបញ្ជូន</Link> {/* NEW */}
            <Link to="/process" className={active("/process")}>ដំណើរការ</Link>{/* NEW */}
           {!token ? (
             <Link to="/login" className={active("/login")}>ចូលគណនី</Link>

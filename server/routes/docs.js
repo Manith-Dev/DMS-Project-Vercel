@@ -25,13 +25,16 @@ const webPrefix = `/${path.basename(uploadDir)}`;
 // ---------- Multer ----------
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, absUploadDir),
-  filename: (_req, file, cb) => cb(null, uniqueSafeName(absUploadDir, file.originalname)),
+  filename: (_req, file, cb) =>
+    cb(null, uniqueSafeName(absUploadDir, file.originalname)),
 });
 const upload = multer({
   storage,
   limits: { fileSize: 50 * 1024 * 1024, files: 12 },
   fileFilter: (_req, file, cb) =>
-    file.mimetype === "application/pdf" ? cb(null, true) : cb(new Error("PDF files only")),
+    file.mimetype === "application/pdf"
+      ? cb(null, true)
+      : cb(new Error("PDF files only")),
 });
 const mapFiles = (files = []) =>
   files.map((f) => ({
@@ -42,7 +45,7 @@ const mapFiles = (files = []) =>
     path: `${webPrefix}/${f.filename}`.replace(/\\/g, "/"),
   }));
 
-// ---------- History helpers (strong de-dupe) ----------
+// ---------- History helpers ----------
 const floorToMinute = (d) => {
   const x = new Date(d);
   x.setSeconds(0, 0);
@@ -63,7 +66,7 @@ function pushDedupe(historyArr, step) {
     (h) => (h.stage || "").trim() === keyStage && floorToMinute(h.at) === keyAt
   );
   if (idx >= 0) {
-    if (!arr[idx].note && step.note) arr[idx].note = step.note; // merge note
+    if (!arr[idx].note && step.note) arr[idx].note = step.note;
     return arr;
   }
   arr.push(step);
@@ -91,7 +94,7 @@ router.get("/", async (req, res, next) => {
 
     const filter = {};
     if (type) filter.documentType = type;
-    if (department) filter.department = department;
+    if (department) filter.department = department; // <- works after we save it
     if (sourceType) filter.sourceType = sourceType;
     if (stage) filter.stage = stage;
 
@@ -117,18 +120,15 @@ router.get("/", async (req, res, next) => {
       Document.countDocuments(q.trim() ? { $text: { $search: q.trim() }, ...filter } : filter),
     ]);
     res.json({ page: p, limit: l, total, items });
-  } catch (e) {
-    next(e);
-  }
+  } catch (e) { next(e); }
 });
 
-// ---------- JOURNEY (before "/:id") ----------
+// ---------- JOURNEY ----------
 router.get("/:id/journey", async (req, res, next) => {
   try {
     const doc = await Document.findById(req.params.id).lean();
     if (!doc) return res.status(404).json({ error: "Document not found" });
 
-    // collapse duplicates by (stage, minute)
     const byKey = new Map();
     for (const h of doc.history || []) {
       const key = `${(h.stage || "").trim()}|${floorToMinute(h.at)}`;
@@ -140,9 +140,7 @@ router.get("/:id/journey", async (req, res, next) => {
     );
 
     res.json({ items, history: items });
-  } catch (e) {
-    next(e);
-  }
+  } catch (e) { next(e); }
 });
 
 // ---------- GET ONE ----------
@@ -151,18 +149,17 @@ router.get("/:id", async (req, res, next) => {
     const doc = await Document.findById(req.params.id).lean();
     if (!doc) return res.status(404).json({ error: "Document not found" });
     res.json(doc);
-  } catch (e) {
-    next(e);
-  }
+  } catch (e) { next(e); }
 });
 
-// ---------- CREATE ----------
+// ---------- CREATE (now saves department) ----------
 router.post("/", upload.array("files"), async (req, res, next) => {
   try {
     const b = req.body || {};
     const payload = {
       date: b.date ? new Date(b.date) : new Date(),
       organization: b.organization || "",
+      department: b.department || "",          // <-- NEW: save department
       subject: b.subject || "",
       summary: b.summary || "",
       priority: b.priority || "Normal",
@@ -185,7 +182,7 @@ router.post("/", upload.array("files"), async (req, res, next) => {
 
     const doc = new Document(payload);
 
-    // seed history from provided steps (with strong de-dupe)
+    // seed history from provided steps
     doc.history = [];
     if (payload.fromDept)
       doc.history = pushDedupe(
@@ -207,12 +204,10 @@ router.post("/", upload.array("files"), async (req, res, next) => {
 
     await doc.save();
     res.status(201).json(doc);
-  } catch (e) {
-    next(e);
-  }
+  } catch (e) { next(e); }
 });
 
-// ---------- UPDATE (meta & add files) ----------
+// ---------- UPDATE (now updates department) ----------
 router.put("/:id", upload.array("files"), async (req, res, next) => {
   try {
     const b = req.body || {};
@@ -222,6 +217,7 @@ router.put("/:id", upload.array("files"), async (req, res, next) => {
     const set = (k, v) => { if (v !== undefined) doc[k] = v; };
     set("date", b.date ? new Date(b.date) : doc.date);
     set("organization", b.organization);
+    set("department", b.department);           // <-- NEW: update department
     set("subject", b.subject);
     set("summary", b.summary);
     set("priority", b.priority);
@@ -242,9 +238,7 @@ router.put("/:id", upload.array("files"), async (req, res, next) => {
 
     await doc.save();
     res.json(doc);
-  } catch (e) {
-    next(e);
-  }
+  } catch (e) { next(e); }
 });
 
 // ---------- DELETE ----------
@@ -253,9 +247,7 @@ router.delete("/:id", async (req, res, next) => {
     const doc = await Document.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ error: "Document not found" });
     res.json({ ok: true });
-  } catch (e) {
-    next(e);
-  }
+  } catch (e) { next(e); }
 });
 
 // ---------- DOWNLOAD ----------
@@ -274,14 +266,15 @@ router.get("/:id/files/:index/download", async (req, res, next) => {
     if (!fs.existsSync(fullpath)) return res.status(404).json({ error: "File missing on server" });
 
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(f.originalName || filename)}"`);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${encodeURIComponent(f.originalName || filename)}"`
+    );
     fs.createReadStream(fullpath).pipe(res);
-  } catch (e) {
-    next(e);
-  }
+  } catch (e) { next(e); }
 });
 
-// ---------- MOVE STAGE (append to history with de-dupe) ----------
+// ---------- MOVE STAGE ----------
 router.put("/:id/stage", async (req, res, next) => {
   try {
     const { stage, note, at } = req.body || {};
@@ -296,9 +289,7 @@ router.put("/:id/stage", async (req, res, next) => {
 
     await doc.save();
     res.json(doc);
-  } catch (e) {
-    next(e);
-  }
+  } catch (e) { next(e); }
 });
 
 export default router;

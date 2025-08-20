@@ -37,17 +37,20 @@ export async function searchDocs({
 
   // Backward compatibility: some server builds expect `date`, others `dateFrom/dateTo`
   if (date) {
-    params.set("date", date);           // new handler
-    params.set("dateFrom", date);       // older handler
-    params.set("dateTo", date);         // older handler
+    params.set("date", date);
+    params.set("dateFrom", date);
+    params.set("dateTo", date);
   }
 
   return jfetch(`${BASE}/api/docs?${params.toString()}`);
 }
 
-export async function getStats() {
+// UPDATED: allow querying stats with sourceType
+export async function getStats({ sourceType = "" } = {}) {
+  const params = new URLSearchParams();
+  if (sourceType) params.set("sourceType", sourceType);
   try {
-    return await jfetch(`${BASE}/api/stats`);
+    return await jfetch(`${BASE}/api/stats?${params.toString()}`);
   } catch {
     return { totalDocs: 0, receivedToday: 0, withFiles: 0, byType: [] };
   }
@@ -79,10 +82,6 @@ export async function deleteDoc(id) {
   return jfetch(`${BASE}/api/docs/${id}`, { method: "DELETE" });
 }
 
-/**
- * Move a document to a new stage (append to history)
- * Supports optional `at` to set a specific timestamp for the step.
- */
 export async function setStage(id, { stage, note = "", at } = {}) {
   const token = localStorage.getItem("token") || "";
   const body = { stage, note };
@@ -98,10 +97,6 @@ export async function setStage(id, { stage, note = "", at } = {}) {
   });
 }
 
-/**
- * Get journey/history for a document.
- * Tolerates any server shape: array, {items}, or {history}.
- */
 export async function getJourney(id) {
   const data = await jfetch(`${BASE}/api/docs/${id}/journey`);
   if (Array.isArray(data)) return data;

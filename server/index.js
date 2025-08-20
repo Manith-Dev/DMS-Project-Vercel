@@ -7,68 +7,88 @@ import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+
 import Document from "./models/Document.js";
 import docsRouter from "./routes/docs.js";
-import { loginHandler } from "./Auth/auth.js";
+import { loginHandler } from "./Auth/auth.js"; // if unused, you can remove this import
 
 dotenv.config();
 const app = express();
 
-// Resolve the directory of this file (ESM-safe)
+/* ----------- Windows-safe __dirname ----------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// middleware
+/* ----------- Middleware ----------- */
 app.use(morgan("dev"));
-app.use(express.json());   // ✅ fixed here
+app.use(express.json());
 app.use(
   cors({
     origin: "http://localhost:5173",
-    credentials: false
+    credentials: false,
   })
 );
 
-// static for uploaded PDFs (absolute path from server folder)
+/* ----------- Static uploads dir (Windows safe) ----------- */
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
-const absUploadDir = path.join(__dirname, uploadDir);
-if (!fs.existsSync(absUploadDir)) fs.mkdirSync(absUploadDir, { recursive: true });
-app.use(`/${uploadDir}`, express.static(absUploadDir));
+// If an absolute path is provided in env, use it as-is; otherwise resolve from server dir
+const absUploadDir = path.isAbsolute(uploadDir)
+  ? uploadDir
+  : path.join(__dirname, uploadDir);
 
-// connect Mongo
+// Ensure folder exists
+fs.mkdirSync(absUploadDir, { recursive: true });
+
+// Serve files at /<folder-name> (e.g. /uploads)
+app.use(`/${path.basename(absUploadDir)}`, express.static(absUploadDir));
+
+/* ----------- DB ----------- */
 await mongoose.connect(process.env.MONGO_URI);
 
-// health
+/* ----------- Health ----------- */
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
-// ---------- /api/stats ----------
-app.get("/api/stats", async (_, res, next) => {
+/* ----------- Stats (supports ?sourceType=incoming|outgoing) ----------- */
+app.get("/api/stats", async (req, res, next) => {
   try {
-    const totalDocs = await Document.countDocuments();
+    const { sourceType = "" } = req.query;
+    const baseMatch = {};
+    if (sourceType) baseMatch.sourceType = sourceType;
 
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
-    const receivedToday = await Document.countDocuments({
-      createdAt: { $gte: startOfToday }
-    });
 
-    const withFiles = await Document.countDocuments({
-      files: { $exists: true, $ne: [] }
-    });
+    const [totalDocs, receivedToday, withFiles, byType] = await Promise.all([
+      Document.countDocuments(baseMatch),
 
-    const byType = await Document.aggregate([
-      { $group: { _id: "$documentType", count: { $sum: 1 } } },
-      { $project: { _id: 0, name: "$_id", value: "$count" } },
-      { $sort: { value: -1 } }
+      Document.countDocuments({
+        ...baseMatch,
+        createdAt: { $gte: startOfToday },
+      }),
+
+      Document.countDocuments({
+        ...baseMatch,
+        files: { $exists: true, $ne: [] },
+      }),
+
+      Document.aggregate([
+        { $match: baseMatch },
+        { $group: { _id: "$documentType", count: { $sum: 1 } } },
+        { $project: { _id: 0, name: "$_id", value: "$count" } },
+        { $sort: { value: -1 } },
+      ]),
     ]);
 
     res.json({ totalDocs, receivedToday, withFiles, byType });
-  } catch (e) { next(e); }
+  } catch (e) {
+    next(e);
+  }
 });
 
-// docs CRUD
+/* ----------- Routers ----------- */
 app.use("/api/docs", docsRouter);
 
-// error handler
+/* ----------- Error handler ----------- */
 app.use((err, req, res, _next) => {
   console.error(err);
   res.status(400).json({ error: err.message || "Server error" });
@@ -76,4 +96,3 @@ app.use((err, req, res, _next) => {
 
 const port = process.env.PORT || 5001;
 app.listen(port, () => console.log(`API on http://localhost:${port}`));
-  
