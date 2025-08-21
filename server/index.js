@@ -167,5 +167,73 @@ app.get("/api/stats", async (_, res, next) => {
   }
 });
 
+
+// ---------- /api/stats ----------
+app.get("/api/stats", async (_req, res, next) => {
+  try {
+    // existing numbers you already returned
+    const totalDocs = await Document.countDocuments();
+
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+
+    const receivedToday = await Document.countDocuments({
+      createdAt: { $gte: startOfToday, $lte: endOfToday },
+    });
+
+    const withFiles = await Document.countDocuments({
+      files: { $exists: true, $ne: [] },
+    });
+
+    const byType = await Document.aggregate([
+      { $group: { _id: "$documentType", count: { $sum: 1 } } },
+      { $project: { _id: 0, name: "$_id", value: "$count" } },
+      { $sort: { value: -1 } },
+    ]);
+
+    // ---------- NEW: outgoing counters used by Dispatch.jsx ----------
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const endOfMonth = new Date(startOfMonth);
+    endOfMonth.setMonth(endOfMonth.getMonth() + 1);
+    endOfMonth.setDate(0); // last day of month
+    endOfMonth.setHours(23, 59, 59, 999);
+
+    // Use createdAt to count new sends; if you prefer the document date, swap field to "date"
+    const outgoingTotal = await Document.countDocuments({ sourceType: "outgoing" });
+
+    const outgoingToday = await Document.countDocuments({
+      sourceType: "outgoing",
+      createdAt: { $gte: startOfToday, $lte: endOfToday },
+    });
+
+    const outgoingThisMonth = await Document.countDocuments({
+      sourceType: "outgoing",
+      createdAt: { $gte: startOfMonth, $lte: endOfMonth },
+    });
+
+    res.json({
+      // old fields (kept)
+      totalDocs,
+      receivedToday,
+      withFiles,
+      byType,
+
+      // new fields for Dispatch.jsx counters
+      outgoingTotal,
+      outgoingToday,
+      outgoingThisMonth,
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+
+
 const port = process.env.PORT || 5001;
 app.listen(port, () => console.log(`API on http://localhost:${port}`));
