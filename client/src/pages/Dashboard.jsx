@@ -1,7 +1,6 @@
 // client/src/pages/Dashboard.jsx
 import React from "react";
-import { useNavigate } from "react-router-dom";
-import { searchDocs, getStats, deleteDoc, createDoc } from "../lib/api.js";
+import { searchDocs, getStats, deleteDoc, createDoc, updateDoc } from "../lib/api.js";
 import { ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { departments } from "../data/options.js";
 import DatePicker from "react-datepicker";
@@ -39,15 +38,13 @@ function fixLegacyName(n) {
 }
 function truncateFileName(n, m = 10) {
   if (!n) return "PDF";
-  const i = n.lastIndexOf("."),
-    b = i > 0 ? n.slice(0, i) : n,
-    e = i > 0 ? n.slice(i) : "";
+  const i = n.lastIndexOf(".");
+  const b = i > 0 ? n.slice(0, i) : n;
+  const e = i > 0 ? n.slice(i) : "";
   return b.length <= m ? n : b.slice(0, m) + "…" + e;
 }
 
-/* ========================================================================== */
-/*                              Dropzone component                            */
-/* ========================================================================== */
+/* ---------------- PDF dropzone ---------------- */
 function PdfDropzone({ files, setFiles }) {
   const inputRef = React.useRef(null);
   const [over, setOver] = React.useState(false);
@@ -60,7 +57,6 @@ function PdfDropzone({ files, setFiles }) {
     e.preventDefault();
     setOver(false);
     const dropped = Array.from(e.dataTransfer.files || []);
-    // accept only PDFs
     const pdfs = dropped.filter(
       (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name)
     );
@@ -81,32 +77,22 @@ function PdfDropzone({ files, setFiles }) {
         onDrop={onDrop}
         className={[
           "w-full rounded-lg border-2 border-dashed px-4 py-14 text-center transition-colors cursor-pointer",
-          over
-            ? "border-indigo-400 bg-indigo-50"
-            : "border-slate-300 bg-slate-50",
+          over ? "border-indigo-400 bg-indigo-50" : "border-slate-300 bg-slate-50",
         ].join(" ")}
       >
         {files.length === 0 ? (
           <div className="text-slate-600">
             បញ្ចូលឯកសារ PDF នៅទីនេះ:
-            <div className="text-xs text-slate-500 mt-1">
-              (ចុច ឬ អូសទៅទីនេះ)
-            </div>
+            <div className="text-xs text-slate-500 mt-1">(ចុច ឬ អូសទៅទីនេះ)</div>
           </div>
         ) : (
           <div className="text-left max-w-full mx-auto">
-            <div className="text-sm font-medium mb-1">
-              ឯកសារបានជ្រើស ({files.length})
-            </div>
+            <div className="text-sm font-medium mb-1">ឯកសារបានជ្រើស ({files.length})</div>
             <ul className="text-sm list-disc pl-5 space-y-0.5">
               {files.slice(0, 5).map((f, i) => (
-                <li key={i} className="truncate">
-                  {f.name}
-                </li>
+                <li key={i} className="truncate">{f.name}</li>
               ))}
-              {files.length > 5 && (
-                <li className="text-slate-500">… បន្ថែម​ទៀត</li>
-              )}
+              {files.length > 5 && <li className="text-slate-500">… បន្ថែម​ទៀត</li>}
             </ul>
           </div>
         )}
@@ -123,46 +109,64 @@ function PdfDropzone({ files, setFiles }) {
   );
 }
 
-/* ========================================================================== */
-/*                             CREATE MODAL (inline)                          */
-/* ========================================================================== */
-function CreateIncomingModal({ open, onClose, onCreated }) {
+/* ---------------- CREATE / EDIT modal ---------------- */
+function IncomingModal({ open, mode = "create", initial, onClose, onSaved }) {
   const [submitting, setSubmitting] = React.useState(false);
-
+  const [files, setFiles] = React.useState([]);
   const [form, setForm] = React.useState({
     date: "",
-    organization: "", // will be from dropdown
+    organization: "",
     department: "",
-    priority: "Normal",
+    priority: "",           // <- empty (requires selection)
     subject: "",
     summary: "",
     remarks: "",
     confidential: false,
-    documentType: "កំណត់បង្ហាញ",
+    documentType: "",       // <- empty (requires selection)
   });
-  const [files, setFiles] = React.useState([]);
 
   React.useEffect(() => {
-    if (!open) {
+    if (!open) return;
+    if (mode === "edit" && initial) {
+      setForm({
+        date: initial.date ? new Date(initial.date).toISOString().slice(0, 10) : "",
+        organization: initial.organization || "",
+        department: initial.department || "",
+        priority: initial.priority || "",           // fallback to empty
+        subject: initial.subject || "",
+        summary: initial.summary || "",
+        remarks: initial.remarks || "",
+        confidential: !!initial.confidential,
+        documentType: initial.documentType || "",   // fallback to empty
+      });
+      setFiles([]);
+    } else {
       setForm({
         date: "",
         organization: "",
         department: "",
-        priority: "Normal",
+        priority: "",          // empty
         subject: "",
         summary: "",
         remarks: "",
         confidential: false,
-        documentType: "កំណត់បង្ហាញ",
+        documentType: "",      // empty
       });
       setFiles([]);
     }
-  }, [open]);
+  }, [open, mode, initial]);
 
   async function submit(e) {
     e.preventDefault();
-    if (!form.date || !form.organization || !form.department || !form.subject) {
-      alert("សូមបំពេញ កាលបរិច្ឆេទ / អង្គភាព / នាយកដ្ឋាន / ចំណងជើង");
+    if (
+      !form.date ||
+      !form.organization ||
+      !form.department ||
+      !form.subject ||
+      !form.priority ||
+      !form.documentType
+    ) {
+      alert("សូមបំពេញ៖ កាលបរិច្ឆេទ / អង្គភាព / នាយកដ្ឋាន / ចំណងជើង / កម្រិត / ប្រភេទឯកសារ");
       return;
     }
     setSubmitting(true);
@@ -176,14 +180,19 @@ function CreateIncomingModal({ open, onClose, onCreated }) {
         summary: form.summary,
         remarks: form.remarks,
         confidential: form.confidential,
-        documentType: form.documentType || "កំណត់បង្ហាញ",
-        sourceType: SOURCE_TYPE, // IMPORTANT
+        documentType: form.documentType,
+        sourceType: SOURCE_TYPE,
       };
-      await createDoc(payload, files);
-      onCreated?.();
+
+      if (mode === "edit" && initial?._id) {
+        await updateDoc(initial._id, payload, files);
+      } else {
+        await createDoc(payload, files);
+      }
+      onSaved?.();
       onClose();
     } catch (err) {
-      alert(err.message || "បន្ថែមបរាជ័យ");
+      alert(err.message || (mode === "edit" ? "កែប្រែបរាជ័យ" : "បន្ថែមបរាជ័យ"));
     } finally {
       setSubmitting(false);
     }
@@ -191,19 +200,23 @@ function CreateIncomingModal({ open, onClose, onCreated }) {
 
   if (!open) return null;
 
+  const saveDisabled =
+    submitting ||
+    !form.date ||
+    !form.organization ||
+    !form.department ||
+    !form.subject ||
+    !form.priority ||
+    !form.documentType;
+
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center">
-      <form
-        onSubmit={submit}
-        className="bg-white rounded-lg w-full max-w-5xl p-6 grid gap-4"
-      >
+      <form onSubmit={submit} className="bg-white rounded-lg w-full max-w-5xl p-6 grid gap-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">បញ្ចូលឯកសារ (Incoming)</h3>
-          <button
-            type="button"
-            className="btn-secondary px-3 py-1"
-            onClick={onClose}
-          >
+          <h3 className="text-lg font-semibold">
+            {mode === "edit" ? "កែប្រែឯកសារ (Incoming)" : "បញ្ចូលឯកសារ (Incoming)"}
+          </h3>
+          <button type="button" className="btn-secondary px-3 py-1" onClick={onClose}>
             បិទ
           </button>
         </div>
@@ -213,33 +226,23 @@ function CreateIncomingModal({ open, onClose, onCreated }) {
             <span className="text-sm text-slate-600">កាលបរិច្ឆេទ</span>
             <DatePicker
               selected={form.date ? new Date(form.date) : null}
-              onChange={(d) =>
-                setForm((f) => ({
-                  ...f,
-                  date: d ? d.toISOString().slice(0, 10) : "",
-                }))
-              }
+              onChange={(d) => setForm((f) => ({ ...f, date: d ? d.toISOString().slice(0, 10) : "" }))}
               dateFormat="dd/MM/yyyy"
               placeholderText="ថ្ងៃ/ខែ/ឆ្នាំ"
               className="input"
             />
           </label>
 
-          {/* Organization as dropdown */}
           <label className="grid gap-1">
             <span className="text-sm text-slate-600">អង្គភាព/Organization</span>
             <select
               className="input"
               value={form.organization}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, organization: e.target.value }))
-              }
+              onChange={(e) => setForm((f) => ({ ...f, organization: e.target.value }))}
             >
               <option value="">-- ជ្រើសរើស --</option>
               {ORG_OPTIONS.map((o) => (
-                <option key={o} value={o}>
-                  {o}
-                </option>
+                <option key={o} value={o}>{o}</option>
               ))}
             </select>
           </label>
@@ -249,10 +252,9 @@ function CreateIncomingModal({ open, onClose, onCreated }) {
             <select
               className="input"
               value={form.priority}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, priority: e.target.value }))
-              }
+              onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value }))}
             >
+              <option value="">-- ជ្រើសរើស --</option>
               <option value="Low">ធម្មតា</option>
               <option value="Normal">ប្រញាប់</option>
               <option value="High">បន្ទាន់</option>
@@ -266,20 +268,15 @@ function CreateIncomingModal({ open, onClose, onCreated }) {
             <select
               className="input"
               value={form.documentType}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, documentType: e.target.value }))
-              }
+              onChange={(e) => setForm((f) => ({ ...f, documentType: e.target.value }))}
             >
+              <option value="">-- ជ្រើសរើស --</option>
               <option value="កំណត់បង្ហាញ">កំណត់បង្ហាញ</option>
               <option value="កំណត់ហេតុ">កំណត់ហេតុ</option>
               <option value="របាយការណ៍">របាយការណ៍</option>
-              <option value="របាយការណ៍លទ្ធផលអង្កេត">
-                របាយការណ៍លទ្ធផលអង្កេត
-              </option>
+              <option value="របាយការណ៍លទ្ធផលអង្កេត">របាយការណ៍លទ្ធផលអង្កេត</option>
               <option value="សំណើរសុំគោលការណ៍">សំណើរសុំគោលការណ៍</option>
-              <option value="សំណើរសុំគោលការណ៍អង្កេត">
-                សំណើរសុំគោលការណ៍អង្កេត
-              </option>
+              <option value="សំណើរសុំគោលការណ៍អង្កេត">សំណើរសុំគោលការណ៍អង្កេត</option>
             </select>
           </label>
 
@@ -288,15 +285,11 @@ function CreateIncomingModal({ open, onClose, onCreated }) {
             <select
               className="input"
               value={form.department}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, department: e.target.value }))
-              }
+              onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))}
             >
               <option value="">-- ជ្រើសរើស --</option>
               {departments.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
+                <option key={d} value={d}>{d}</option>
               ))}
             </select>
           </label>
@@ -307,9 +300,7 @@ function CreateIncomingModal({ open, onClose, onCreated }) {
           <input
             className="input"
             value={form.subject}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, subject: e.target.value }))
-            }
+            onChange={(e) => setForm((f) => ({ ...f, subject: e.target.value }))}
           />
         </label>
 
@@ -319,9 +310,7 @@ function CreateIncomingModal({ open, onClose, onCreated }) {
             rows={3}
             className="input"
             value={form.summary}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, summary: e.target.value }))
-            }
+            onChange={(e) => setForm((f) => ({ ...f, summary: e.target.value }))}
           />
         </label>
 
@@ -331,9 +320,7 @@ function CreateIncomingModal({ open, onClose, onCreated }) {
             rows={3}
             className="input"
             value={form.remarks}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, remarks: e.target.value }))
-            }
+            onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))}
           />
         </label>
 
@@ -341,26 +328,19 @@ function CreateIncomingModal({ open, onClose, onCreated }) {
           <input
             type="checkbox"
             checked={form.confidential}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, confidential: e.target.checked }))
-            }
+            onChange={(e) => setForm((f) => ({ ...f, confidential: e.target.checked }))}
           />
           <span className="text-sm text-slate-700">សម្ងាត់ / Confidential</span>
         </label>
 
-        {/* Pretty PDF dropzone */}
         <PdfDropzone files={files} setFiles={setFiles} />
 
         <div className="flex items-center justify-end gap-3">
-          <button
-            type="button"
-            className="btn-secondary px-3 py-2"
-            onClick={onClose}
-          >
+          <button type="button" className="btn-secondary px-3 py-2" onClick={onClose}>
             បោះបង់
           </button>
-          <button type="submit" className="btn px-4 py-2" disabled={submitting}>
-            {submitting ? "កំពុងរក្សាទុក…" : "រក្សាទុក"}
+          <button type="submit" className="btn px-4 py-2" disabled={saveDisabled}>
+            {submitting ? "កំពុងរក្សាទុក…" : mode === "edit" ? "រក្សាទុក" : "បញ្ចូល"}
           </button>
         </div>
       </form>
@@ -368,12 +348,8 @@ function CreateIncomingModal({ open, onClose, onCreated }) {
   );
 }
 
-/* ========================================================================== */
-/*                               DASHBOARD PAGE                               */
-/* ========================================================================== */
+/* ---------------- DASHBOARD ---------------- */
 export default function Dashboard() {
-  const nav = useNavigate();
-
   // filters
   const [q, setQ] = React.useState("");
   const [type, setType] = React.useState("");
@@ -385,32 +361,26 @@ export default function Dashboard() {
   const [loading, setLoading] = React.useState(false);
   const [stats, setStats] = React.useState(null);
 
-  // modal
+  // modals
   const [openCreate, setOpenCreate] = React.useState(false);
+  const [openEdit, setOpenEdit] = React.useState(false);
+  const [editRow, setEditRow] = React.useState(null);
 
-  // derived stats fallback (incoming-only)
   const derivedStats = React.useMemo(() => {
-    const rows = (items || []).filter(
-      (it) => (it.sourceType || "") === SOURCE_TYPE
-    );
+    const rows = (items || []).filter((it) => (it.sourceType || "") === SOURCE_TYPE);
     const totalDocs = rows.length;
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
     const receivedToday = rows.filter(
       (r) => new Date(r.createdAt || r.date || 0) >= startOfToday
     ).length;
-    const withFiles = rows.filter(
-      (r) => Array.isArray(r.files) && r.files.length > 0
-    ).length;
+    const withFiles = rows.filter((r) => Array.isArray(r.files) && r.files.length > 0).length;
     const byTypeMap = new Map();
     rows.forEach((r) => {
       const t = r.documentType || "";
       byTypeMap.set(t, (byTypeMap.get(t) || 0) + 1);
     });
-    const byType = [...byTypeMap.entries()].map(([name, value]) => ({
-      name,
-      value,
-    }));
+    const byType = [...byTypeMap.entries()].map(([name, value]) => ({ name, value }));
     return { totalDocs, receivedToday, withFiles, byType };
   }, [items]);
 
@@ -419,10 +389,7 @@ export default function Dashboard() {
       Array.isArray(stats?.byType) && stats?.__scoped === SOURCE_TYPE
         ? stats.byType
         : derivedStats.byType;
-    return src.map((d) => ({
-      name: d.name ?? "",
-      value: Number(d.value) || 0,
-    }));
+    return src.map((d) => ({ name: d.name ?? "", value: Number(d.value) || 0 }));
   }, [stats, derivedStats]);
 
   const topCounts = React.useMemo(() => {
@@ -450,12 +417,9 @@ export default function Dashboard() {
         getStats({ sourceType: SOURCE_TYPE }),
       ]);
 
-      let rows = (list || []).filter(
-        (it) => (it.sourceType || "") === SOURCE_TYPE
-      );
+      let rows = (list || []).filter((it) => (it.sourceType || "") === SOURCE_TYPE);
       const wantDept = current.dept ?? dept;
-      if (wantDept)
-        rows = rows.filter((it) => (it.department || "") === wantDept);
+      if (wantDept) rows = rows.filter((it) => (it.department || "") === wantDept);
 
       setItems(rows);
       setStats({ ...(s || {}), __scoped: SOURCE_TYPE });
@@ -464,9 +428,7 @@ export default function Dashboard() {
     }
   }
 
-  React.useEffect(() => {
-    load();
-  }, []);
+  React.useEffect(() => { load(); }, []);
   React.useEffect(() => {
     const h = setTimeout(() => load({ q, type, dept, date }), 400);
     return () => clearTimeout(h);
@@ -483,12 +445,9 @@ export default function Dashboard() {
     const url = `${base}/api/docs/${docId}/files/${index}/download?t=${Date.now()}`;
     try {
       const r = await fetch(url, { method: "GET" });
-      if (!r.ok)
-        throw new Error(await r.text().catch(() => `HTTP ${r.status}`));
+      if (!r.ok) throw new Error(await r.text().catch(() => `HTTP ${r.status}`));
       const blob = await r.blob();
-      const pdfBlob = blob.type
-        ? blob
-        : new Blob([blob], { type: "application/pdf" });
+      const pdfBlob = blob.type ? blob : new Blob([blob], { type: "application/pdf" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(pdfBlob);
       a.download = filename || "file.pdf";
@@ -498,9 +457,7 @@ export default function Dashboard() {
       setTimeout(() => URL.revokeObjectURL(a.href), 0);
     } catch (e) {
       if (directPath) {
-        window.location.href =
-          (import.meta.env.VITE_API_URL || "http://localhost:5001") +
-          directPath;
+        window.location.href = (import.meta.env.VITE_API_URL || "http://localhost:5001") + directPath;
       } else {
         alert(e.message || "Download failed");
       }
@@ -539,30 +496,22 @@ export default function Dashboard() {
                     labelLine={false}
                   >
                     {chartData.map((_, i) => (
-                      <Cell
-                        key={i}
-                        fill={CHART_COLORS[i % CHART_COLORS.length]}
-                      />
+                      <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                     ))}
                   </Pie>
                 </PieChart>
               </ResponsiveContainer>
             </div>
             <ul className="text-sm grid gap-2">
-              {chartData.length === 0 && (
-                <li className="text-slate-500">គ្មានទិន្នន័យ</li>
-              )}
+              {chartData.length === 0 && <li className="text-slate-500">គ្មានទិន្នន័យ</li>}
               {chartData.map((d, i) => (
                 <li key={d.name + i} className="flex items-center gap-2">
                   <span
                     className="inline-block w-3 h-3 rounded"
-                    style={{
-                      background: CHART_COLORS[i % CHART_COLORS.length],
-                    }}
+                    style={{ background: CHART_COLORS[i % CHART_COLORS.length] }}
                   />
                   <span className="whitespace-nowrap">
-                    {d.name || "មិនកំណត់"}{" "}
-                    <span className="text-slate-500">= {d.value}</span>
+                    {d.name || "មិនកំណត់"} <span className="text-slate-500">= {d.value}</span>
                   </span>
                 </li>
               ))}
@@ -584,34 +533,22 @@ export default function Dashboard() {
         </div>
         <div className="grid gap-1">
           <label className="text-sm text-slate-600">ប្រភេទឯកសារ</label>
-          <select
-            className="input"
-            value={type}
-            onChange={(e) => setType(e.target.value)}
-          >
+          <select className="input" value={type} onChange={(e) => setType(e.target.value)}>
             <option value="">ទាំងអស់</option>
             <option value="កំណត់បង្ហាញ">កំណត់បង្ហាញ</option>
             <option value="កំណត់ហេតុ">កំណត់ហេតុ</option>
             <option value="របាយការណ៍">របាយការណ៍</option>
             <option value="របាយការណ៍លទ្ធផលអង្កេត">របាយការណ៍លទ្ធផលអង្កេត</option>
             <option value="សំណើរសុំគោលការណ៍">សំណើរសុំគោលការណ៍</option>
-            <option value="សំណើរសុំគោលការណ៍អង្កេត">
-              សំណើរសុំគោលការណ៍អង្កេត
-            </option>
+            <option value="សំណើរសុំគោលការណ៍អង្កេត">សំណើរសុំគោលការណ៍អង្កេត</option>
           </select>
         </div>
         <div className="grid gap-1">
           <label className="text-sm text-slate-600">នាយកដ្ឋាន</label>
-          <select
-            className="input"
-            value={dept}
-            onChange={(e) => setDept(e.target.value)}
-          >
+          <select className="input" value={dept} onChange={(e) => setDept(e.target.value)}>
             <option value="">ទាំងអស់</option>
             {departments.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
+              <option key={d} value={d}>{d}</option>
             ))}
           </select>
         </div>
@@ -635,7 +572,7 @@ export default function Dashboard() {
               <th className="px-4 py-2 text-left">កាលបរិច្ឆេទ</th>
               <th className="px-4 py-2 text-left">អង្គភាព</th>
               <th className="px-4 py-2 text-left">ចំណងជើង</th>
-              <th className="px-4 py-2 text-left">បានទទួលពីនាយកដ្ឋាន</th>
+              <th className="px-4 py-2 text-left">នាយកដ្ឋាន</th>
               <th className="px-4 py-2 text-left">កម្រិត</th>
               <th className="px-4 py-2 text-left">ឯកសារ</th>
               <th className="px-4 py-2 text-left">សកម្មភាព</th>
@@ -644,10 +581,7 @@ export default function Dashboard() {
           <tbody>
             {items.length === 0 && (
               <tr>
-                <td
-                  colSpan={7}
-                  className="px-4 py-8 text-center text-slate-500"
-                >
+                <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
                   {loading ? "កំពុងផ្ទុក…" : "គ្មានទិន្នន័យ"}
                 </td>
               </tr>
@@ -656,19 +590,13 @@ export default function Dashboard() {
             {items.map((it) => {
               const hasFile = Array.isArray(it.files) && it.files.length > 0;
               const f0 = hasFile ? it.files[0] : null;
-              const fullName = hasFile
-                ? fixLegacyName(f0.originalName || "PDF")
-                : null;
-              const shortName = hasFile ? truncateFileName(fullName, 10) : null;
+              const fullName = hasFile ? fixLegacyName(f0.originalName || "PDF") : null;
 
               return (
                 <tr key={it._id} className="border-t">
                   <td className="px-4 py-2">{formatDate(it.date)}</td>
                   <td className="px-4 py-2">{it.organization || "-"}</td>
-                  <td
-                    className="px-4 py-2 max-w-[36ch] truncate"
-                    title={it.subject}
-                  >
+                  <td className="px-4 py-2 max-w-[36ch] truncate" title={it.subject}>
                     {it.subject || "-"}
                   </td>
                   <td className="px-4 py-2">{it.department || "-"}</td>
@@ -686,7 +614,7 @@ export default function Dashboard() {
                         }}
                         title={fullName}
                       >
-                        {shortName}
+                        {fullName}
                       </a>
                     ) : (
                       "—"
@@ -695,7 +623,10 @@ export default function Dashboard() {
                   <td className="px-4 py-2 flex items-center gap-2">
                     <button
                       className="btn-secondary px-2 py-1"
-                      onClick={() => nav(`/edit/${it._id}`)}
+                      onClick={() => {
+                        setEditRow(it);
+                        setOpenEdit(true);
+                      }}
                     >
                       កែ
                     </button>
@@ -713,11 +644,19 @@ export default function Dashboard() {
         </table>
       </div>
 
-      {/* Create modal */}
-      <CreateIncomingModal
+      {/* Create & Edit modals */}
+      <IncomingModal
         open={openCreate}
+        mode="create"
         onClose={() => setOpenCreate(false)}
-        onCreated={() => load()}
+        onSaved={() => load()}
+      />
+      <IncomingModal
+        open={openEdit}
+        mode="edit"
+        initial={editRow}
+        onClose={() => { setOpenEdit(false); setEditRow(null); }}
+        onSaved={() => load()}
       />
     </div>
   );
@@ -727,13 +666,9 @@ export default function Dashboard() {
 function StatCard({ label, value }) {
   return (
     <div className="card relative h-28">
-      <div className="absolute top-3 left-4 text-sm text-slate-600">
-        {label}
-      </div>
+      <div className="absolute top-3 left-4 text-sm text-slate-600">{label}</div>
       <div className="h-full w-full flex items-center justify-center">
-        <div className="text-3xl md:text-4xl font-semibold leading-none">
-          {value ?? 0}
-        </div>
+        <div className="text-3xl md:text-4xl font-semibold leading-none">{value ?? 0}</div>
       </div>
     </div>
   );
@@ -742,10 +677,8 @@ function StatCard({ label, value }) {
 function PriorityBadge({ value }) {
   const kh = priorityToKh[value] ?? value ?? "-";
   let cls = "bg-slate-100 text-slate-800";
-  if (value === "Normal" || value === "ប្រញាប់")
-    cls = "bg-amber-100 text-amber-800";
+  if (value === "Normal" || value === "ប្រញាប់") cls = "bg-amber-100 text-amber-800";
   if (value === "High" || value === "បន្ទាន់") cls = "bg-red-100 text-red-800";
-  if (value === "Low" || value === "ធម្មតា")
-    cls = "bg-slate-100 text-slate-800";
+  if (value === "Low" || value === "ធម្មតា") cls = "bg-slate-100 text-slate-800";
   return <span className={`px-2 py-0.5 rounded text-xs ${cls}`}>{kh}</span>;
 }
