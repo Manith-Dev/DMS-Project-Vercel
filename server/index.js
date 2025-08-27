@@ -11,6 +11,7 @@ import { fileURLToPath } from "url";
 import Document from "./models/Document.js";
 import docsRouter from "./routes/docs.js";
 import { loginHandler } from "./Auth/auth.js"; // if unused, you can remove this import
+import verifyFirebaseToken from "./middlewares/verifyFirebaseToken.js"; // ✅ NEW
 
 dotenv.config();
 const app = express();
@@ -31,15 +32,10 @@ app.use(
 
 /* ----------- Static uploads dir (Windows safe) ----------- */
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
-// If an absolute path is provided in env, use it as-is; otherwise resolve from server dir
 const absUploadDir = path.isAbsolute(uploadDir)
   ? uploadDir
   : path.join(__dirname, uploadDir);
-
-// Ensure folder exists
 fs.mkdirSync(absUploadDir, { recursive: true });
-
-// Serve files at /<folder-name> (e.g. /uploads)
 app.use(`/${path.basename(absUploadDir)}`, express.static(absUploadDir));
 
 /* ----------- DB ----------- */
@@ -60,17 +56,8 @@ app.get("/api/stats", async (req, res, next) => {
 
     const [totalDocs, receivedToday, withFiles, byType] = await Promise.all([
       Document.countDocuments(baseMatch),
-
-      Document.countDocuments({
-        ...baseMatch,
-        createdAt: { $gte: startOfToday },
-      }),
-
-      Document.countDocuments({
-        ...baseMatch,
-        files: { $exists: true, $ne: [] },
-      }),
-
+      Document.countDocuments({ ...baseMatch, createdAt: { $gte: startOfToday } }),
+      Document.countDocuments({ ...baseMatch, files: { $exists: true, $ne: [] } }),
       Document.aggregate([
         { $match: baseMatch },
         { $group: { _id: "$documentType", count: { $sum: 1 } } },
@@ -86,7 +73,7 @@ app.get("/api/stats", async (req, res, next) => {
 });
 
 /* ----------- Routers ----------- */
-app.use("/api/docs", docsRouter);
+app.use("/api/docs", verifyFirebaseToken, docsRouter); // ✅ protected
 
 /* ----------- Error handler ----------- */
 app.use((err, req, res, _next) => {
@@ -94,7 +81,7 @@ app.use((err, req, res, _next) => {
   res.status(400).json({ error: err.message || "Server error" });
 });
 
-// ---------- /api/stats ----------
+// ---------- /api/stats (your duplicated versions kept as-is) ----------
 app.get("/api/stats", async (_, res, next) => {
   try {
     const startOfToday = new Date();
@@ -104,50 +91,30 @@ app.get("/api/stats", async (_, res, next) => {
     startOfMonth.setDate(1);
     startOfMonth.setHours(0, 0, 0, 0);
 
-    // Existing metrics
     const totalDocs = await Document.countDocuments();
-
-    const receivedToday = await Document.countDocuments({
-      createdAt: { $gte: startOfToday }
-    });
-
-    const withFiles = await Document.countDocuments({
-      files: { $exists: true, $ne: [] }
-    });
-
+    const receivedToday = await Document.countDocuments({ createdAt: { $gte: startOfToday } });
+    const withFiles = await Document.countDocuments({ files: { $exists: true, $ne: [] } });
     const byType = await Document.aggregate([
       { $group: { _id: "$documentType", count: { $sum: 1 } } },
       { $project: { _id: 0, name: "$_id", value: "$count" } },
-      { $sort: { value: -1 } }
+      { $sort: { value: -1 } },
     ]);
 
-    // NEW: Outgoing stats (បញ្ជូនឯកសារ)
     const outgoingMatch = { sourceType: "outgoing" };
-
     const outgoingTotal = await Document.countDocuments(outgoingMatch);
-
-    // by createdAt for consistency; forwardedDate may be empty
     const outgoingToday = await Document.countDocuments({
       ...outgoingMatch,
-      createdAt: { $gte: startOfToday }
+      createdAt: { $gte: startOfToday },
     });
-
     const outgoingThisMonth = await Document.countDocuments({
       ...outgoingMatch,
-      createdAt: { $gte: startOfMonth }
+      createdAt: { $gte: startOfMonth },
     });
-
     const outgoingByToDept = await Document.aggregate([
       { $match: outgoingMatch },
       { $group: { _id: "$toDept", count: { $sum: 1 } } },
-      {
-        $project: {
-          _id: 0,
-          name: { $ifNull: ["$_id", "—"] },
-          value: "$count"
-        }
-      },
-      { $sort: { value: -1 } }
+      { $project: { _id: 0, name: { $ifNull: ["$_id", "—"] }, value: "$count" } },
+      { $sort: { value: -1 } },
     ]);
 
     res.json({
@@ -155,23 +122,18 @@ app.get("/api/stats", async (_, res, next) => {
       receivedToday,
       withFiles,
       byType,
-
-      // NEW fields for “sent out” tracking
       outgoingTotal,
       outgoingToday,
       outgoingThisMonth,
-      outgoingByToDept
+      outgoingByToDept,
     });
   } catch (e) {
     next(e);
   }
 });
 
-
-// ---------- /api/stats ----------
 app.get("/api/stats", async (_req, res, next) => {
   try {
-    // existing numbers you already returned
     const totalDocs = await Document.countDocuments();
 
     const startOfToday = new Date();
@@ -193,37 +155,30 @@ app.get("/api/stats", async (_req, res, next) => {
       { $sort: { value: -1 } },
     ]);
 
-    // ---------- NEW: outgoing counters used by Dispatch.jsx ----------
     const startOfMonth = new Date();
     startOfMonth.setDate(1);
     startOfMonth.setHours(0, 0, 0, 0);
 
     const endOfMonth = new Date(startOfMonth);
     endOfMonth.setMonth(endOfMonth.getMonth() + 1);
-    endOfMonth.setDate(0); // last day of month
+    endOfMonth.setDate(0);
     endOfMonth.setHours(23, 59, 59, 999);
 
-    // Use createdAt to count new sends; if you prefer the document date, swap field to "date"
     const outgoingTotal = await Document.countDocuments({ sourceType: "outgoing" });
-
     const outgoingToday = await Document.countDocuments({
       sourceType: "outgoing",
       createdAt: { $gte: startOfToday, $lte: endOfToday },
     });
-
     const outgoingThisMonth = await Document.countDocuments({
       sourceType: "outgoing",
       createdAt: { $gte: startOfMonth, $lte: endOfMonth },
     });
 
     res.json({
-      // old fields (kept)
       totalDocs,
       receivedToday,
       withFiles,
       byType,
-
-      // new fields for Dispatch.jsx counters
       outgoingTotal,
       outgoingToday,
       outgoingThisMonth,
@@ -233,7 +188,10 @@ app.get("/api/stats", async (_req, res, next) => {
   }
 });
 
-
+/* ---------- Optional auth test route ---------- */
+app.get("/api/auth/me", verifyFirebaseToken, (req, res) => {
+  res.json({ user: req.user || null });
+});
 
 const port = process.env.PORT || 5001;
 app.listen(port, () => console.log(`API on http://localhost:${port}`));

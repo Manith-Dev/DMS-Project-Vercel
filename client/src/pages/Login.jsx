@@ -1,40 +1,56 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
-import { login } from "../lib/api.js";
+import { useAuth } from "../app/AuthProvider";
 
 export default function Login() {
   const nav = useNavigate();
-  const [email, setEmail] = React.useState("");
-  const [password, setPassword] = React.useState("");
+  const { user, loading, loginWithGoogle } = useAuth();
   const [err, setErr] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
 
-  async function onSubmit(e) {
-    e.preventDefault();
+  React.useEffect(() => {
+    if (!loading && user) {
+      // already signed in -> go home
+      nav("/", { replace: true });
+    }
+  }, [loading, user, nav]);
+
+  async function handleGoogle() {
     setErr("");
+    setBusy(true);
     try {
-      const { token, role, department } = await login({ email, password });
-      localStorage.setItem("token", token);
-      localStorage.setItem("role", role);
-      localStorage.setItem("department", department || "");
-      nav("/");
+      await loginWithGoogle();
+      // AuthProvider will update `user`, effect above will redirect
     } catch (e) {
-      setErr(e.message || "Login failed");
+      setErr(e?.message || "Google sign-in failed");
+      setBusy(false);
     }
   }
 
   return (
-    <form onSubmit={onSubmit} className="card p-6 grid gap-3 max-w-md mx-auto">
-      <h2 className="text-xl font-semibold">ចូលគណនី</h2>
-      <label className="grid gap-1">
-        <span className="text-sm text-slate-600">អ៊ីមែល</span>
-        <input className="input" value={email} onChange={(e)=>setEmail(e.target.value)} />
-      </label>
-      <label className="grid gap-1">
-        <span className="text-sm text-slate-600">ពាក្យសម្ងាត់</span>
-        <input className="input" type="password" value={password} onChange={(e)=>setPassword(e.target.value)} />
-      </label>
-      {err && <div className="text-sm text-red-600">{err}</div>}
-      <button className="btn">ចូល</button>
-    </form>
+    <div className="min-h-[70vh] grid place-items-center">
+      <form
+        onSubmit={(e) => e.preventDefault()}
+        className="card p-6 grid gap-4 max-w-md w-full"
+      >
+        <h2 className="text-xl font-semibold text-center">ចូលប្រើប្រាស់</h2>
+
+        {/* Message */}
+        <p className="text-sm text-slate-600 text-center">
+          សូមចូលប្រើប្រាស់ជាមួយ Google (Gmail) ប៉ុណ្ណោះ
+        </p>
+
+        {err && <div className="text-sm text-red-600 text-center">{err}</div>}
+
+        <button
+          type="button"
+          onClick={handleGoogle}
+          disabled={busy || loading}
+          className="btn flex items-center justify-center gap-2"
+        >
+          {busy ? "កំពុងភ្ជាប់..." : "ចូលប្រើប្រាស់ជាមួយ Google"}
+        </button>
+      </form>
+    </div>
   );
 }
