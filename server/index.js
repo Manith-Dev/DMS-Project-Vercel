@@ -8,10 +8,9 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import Document from "./models/Document.js";
 import docsRouter from "./routes/docs.js";
-import { loginHandler } from "./Auth/auth.js"; // if unused, you can remove this import
 import verifyFirebaseToken from "./middlewares/verifyFirebaseToken.js";
+import Document from "./models/Document.js";
 
 dotenv.config();
 const app = express();
@@ -21,11 +20,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /* ----------- Middleware ----------- */
-app.use(morgan("dev"));
+app.use(morgan("dev"));           // log each request
 app.use(express.json());
-
-// ✅ simplified CORS: allow all origins for now (easiest for first deploy)
-app.use(cors());
+app.use(cors());                  // easiest for first deploy
 
 /* ----------- Static uploads dir (Windows safe) ----------- */
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
@@ -36,12 +33,31 @@ fs.mkdirSync(absUploadDir, { recursive: true });
 app.use(`/${path.basename(absUploadDir)}`, express.static(absUploadDir));
 
 /* ----------- DB ----------- */
-await mongoose.connect(process.env.MONGO_URI);
+try {
+  if (!process.env.MONGO_URI) {
+    console.warn("⚠️  MONGO_URI is not set");
+  } else {
+    await mongoose.connect(process.env.MONGO_URI);
+    console.log("✅ MongoDB connected");
+  }
+} catch (err) {
+  console.error("❌ MongoDB connection error:", err?.message || err);
+  // keep server running so health endpoints still work
+}
 
-/* ----------- Health ----------- */
-app.get("/api/health", (_, res) => res.json({ ok: true }));
+/* ----------- Simple root page ----------- */
+app.get("/", (_req, res) => {
+  res.send(
+    `<h1>API is running</h1>
+     <p>Try <a href="/api/health">/api/health</a> or <a href="/health">/health</a></p>`
+  );
+});
 
-/* ----------- Stats (supports ?sourceType=incoming|outgoing) ----------- */
+/* ----------- Health endpoints ----------- */
+app.get("/api/health", (_req, res) => res.json({ ok: true }));
+app.get("/health", (_req, res) => res.json({ ok: true }));
+
+/* ----------- Stats (optional; keep) ----------- */
 app.get("/api/stats", async (req, res, next) => {
   try {
     const { sourceType = "" } = req.query;
@@ -69,20 +85,33 @@ app.get("/api/stats", async (req, res, next) => {
   }
 });
 
-/* ----------- Routers ----------- */
+/* ----------- Protected docs routes ----------- */
 app.use("/api/docs", verifyFirebaseToken, docsRouter);
 
-/* ----------- Error handler ----------- */
+/* ----------- 404 + error handlers ----------- */
+app.use((req, res) => {
+  res.status(404).send(`Not Found: ${req.method} ${req.originalUrl}`);
+});
 app.use((err, req, res, _next) => {
   console.error(err);
-  res.status(400).json({ error: err.message || "Server error" });
+  res.status(400).json({ error: err?.message || "Server error" });
 });
 
-/* ---------- Optional auth test route ---------- */
-app.get("/api/auth/me", verifyFirebaseToken, (req, res) => {
-  res.json({ user: req.user || null });
-});
+/* ----------- List registered routes (diagnostic) ----------- */
+function listRoutes() {
+  const routes = [];
+  app._router.stack.forEach((m) => {
+    if (m.route && m.route.path) {
+      const methods = Object.keys(m.route.methods).join(",").toUpperCase();
+      routes.push(`${methods} ${m.route.path}`);
+    }
+  });
+  console.log("📜 Registered routes:\n" + routes.map(r => " - " + r).join("\n"));
+}
 
 /* ----------- Start server ----------- */
 const port = process.env.PORT || 5001;
-app.listen(port, () => console.log(`API on http://localhost:${port}`));
+app.listen(port, () => {
+  console.log(`🚀 API listening on http://localhost:${port}`);
+  listRoutes();
+});
