@@ -1,4 +1,4 @@
-// client/src/components/TimelineCard.jsx
+
 import React from "react";
 import { updateHistoryStep, deleteHistoryStep } from "../lib/api.js";
 import { departments as BASE_DEPARTMENTS } from "../data/options.js";

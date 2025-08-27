@@ -2,7 +2,7 @@
 import fs from "fs";
 import path from "path";
 
-/** Convert latin1 → utf8 (best effort). No-op if already utf8. */
+
 export function latin1ToUtf8(str = "") {
   try {
     return Buffer.from(str, "latin1").toString("utf8");
@@ -11,7 +11,6 @@ export function latin1ToUtf8(str = "") {
   }
 }
 
-/** Keep Khmer block U+1780–U+17FF + \w . - ( ) space. Replace others with "_" */
 export function sanitizeKhmerFilename(name = "") {
   const normalized = String(name).normalize("NFC");
   return normalized.replace(/[^\w.\-()\s\u1780-\u17FF]/g, "_");

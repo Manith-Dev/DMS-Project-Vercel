@@ -1,25 +1,42 @@
-# Node dependencies
+# ---- Node / npm / yarn ----
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
 
-# # Build outputs
-# dist/
-# build/
+# ---- Environment variables ----
+.env
+.env.*
+!env.example   # keep a sanitized example file if you want
 
-# # Environment variables
-# .env
-# .env.local
+# ---- Build outputs ----
+dist/
+build/
+.cache/
+.out/
+.vite/
 
-# # Logs
-# *.log
-# npm-debug.log*
-# yarn-debug.log*
-# pnpm-debug.log*
+# ---- OS / Editor junk ----
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
 
-# # OS-specific
-# .DS_Store
-# Thumbs.db
+# ---- Logs ----
+logs
+*.log
+*.log.*
 
-# # IDE settings
-# .vscode/
-# .idea/
- 
+# ---- Server uploads ----
+uploads/
+
+# ---- Coverage / Testing ----
+coverage/
+.nyc_output/
