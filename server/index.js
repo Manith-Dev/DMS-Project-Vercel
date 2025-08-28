@@ -15,16 +15,17 @@ import Document from "./models/Document.js";
 dotenv.config();
 const app = express();
 
-/* ----------- Windows-safe __dirname ----------- */
+/* ----------------------- Windows-safe __dirname ----------------------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/* ----------- Middleware ----------- */
-app.use(morgan("dev"));           // log each request
-app.use(express.json());
-app.use(cors());                  // easiest for first deploy
+/* ----------------------------- Middleware ----------------------------- */
+app.use(morgan("dev"));
+app.use(express.json({ limit: "5mb" }));   // larger JSON bodies
+app.use(cors());                            // allow all origins for first deploy
+app.options("*", cors());                   // handle CORS preflight for PUT/DELETE/etc.
 
-/* ----------- Static uploads dir (Windows safe) ----------- */
+/* ------------------------- Static uploads dir ------------------------- */
 const uploadDir = process.env.UPLOAD_DIR || "uploads";
 const absUploadDir = path.isAbsolute(uploadDir)
   ? uploadDir
@@ -32,7 +33,7 @@ const absUploadDir = path.isAbsolute(uploadDir)
 fs.mkdirSync(absUploadDir, { recursive: true });
 app.use(`/${path.basename(absUploadDir)}`, express.static(absUploadDir));
 
-/* ----------- DB ----------- */
+/* ----------------------------- MongoDB ------------------------------- */
 try {
   if (!process.env.MONGO_URI) {
     console.warn("⚠️  MONGO_URI is not set");
@@ -42,22 +43,21 @@ try {
   }
 } catch (err) {
   console.error("❌ MongoDB connection error:", err?.message || err);
-  // keep server running so health endpoints still work
+  // keep the server running so health endpoints still work
 }
 
-/* ----------- Simple root page ----------- */
+/* ----------------------------- Root/Health ---------------------------- */
 app.get("/", (_req, res) => {
   res.send(
     `<h1>API is running</h1>
-     <p>Try <a href="/api/health">/api/health</a> or <a href="/health">/health</a></p>`
+     <p>Health: <a href="/api/health">/api/health</a> or <a href="/health">/health</a></p>`
   );
 });
-
-/* ----------- Health endpoints ----------- */
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-/* ----------- Stats (optional; keep) ----------- */
+/* -------------------------------- Stats ------------------------------- */
+// Supports optional ?sourceType=incoming|outgoing
 app.get("/api/stats", async (req, res, next) => {
   try {
     const { sourceType = "" } = req.query;
@@ -85,10 +85,11 @@ app.get("/api/stats", async (req, res, next) => {
   }
 });
 
-/* ----------- Protected docs routes ----------- */
+/* ------------------------------ API: Docs ----------------------------- */
+// Protected by Firebase token
 app.use("/api/docs", verifyFirebaseToken, docsRouter);
 
-/* ----------- 404 + error handlers ----------- */
+/* -------------------------- 404 & Error handlers ---------------------- */
 app.use((req, res) => {
   res.status(404).send(`Not Found: ${req.method} ${req.originalUrl}`);
 });
@@ -97,19 +98,37 @@ app.use((err, req, res, _next) => {
   res.status(400).json({ error: err?.message || "Server error" });
 });
 
-/* ----------- List registered routes (diagnostic) ----------- */
-function listRoutes() {
-  const routes = [];
-  app._router.stack.forEach((m) => {
-    if (m.route && m.route.path) {
-      const methods = Object.keys(m.route.methods).join(",").toUpperCase();
-      routes.push(`${methods} ${m.route.path}`);
+/* ------------------------ Route listing (debug) ----------------------- */
+// Prints nested routes (e.g., those in /api/docs) at startup
+function printRoutes(stack, prefix = "") {
+  for (const layer of stack) {
+    if (layer.route?.path) {
+      const methods = Object.keys(layer.route.methods)
+        .map((m) => m.toUpperCase())
+        .join(",");
+      console.log(` - ${methods} ${prefix}${layer.route.path}`);
+    } else if (layer.name === "router" && layer.handle?.stack) {
+      // try to infer the mount path from the regex
+      let mount = "";
+      if (layer.regexp && layer.regexp.fast_slash) {
+        mount = "";
+      } else if (layer.regexp && layer.regexp.source) {
+        mount = layer.regexp.source
+          .replace("^\\", "")
+          .replace("\\/?(?=\\/|$)", "")
+          .replace(/\\\//g, "/")
+          .replace(/\$$/, "");
+      }
+      printRoutes(layer.handle.stack, prefix + mount);
     }
-  });
-  console.log("📜 Registered routes:\n" + routes.map(r => " - " + r).join("\n"));
+  }
+}
+function listRoutes() {
+  console.log("📜 Registered routes:");
+  printRoutes(app._router.stack);
 }
 
-/* ----------- Start server ----------- */
+/* ------------------------------- Listen -------------------------------- */
 const port = process.env.PORT || 5001;
 app.listen(port, () => {
   console.log(`🚀 API listening on http://localhost:${port}`);

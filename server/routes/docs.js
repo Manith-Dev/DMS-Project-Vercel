@@ -54,8 +54,8 @@ const mapFiles = (files = []) =>
   files.map((f) => {
     const displayName = latin1ToUtf8(f.originalname || f.filename || "file.pdf");
     return {
-      originalName: displayName,            // Khmer-safe display filename
-      filename: f.filename,                 // actual saved filename on disk
+      originalName: displayName, // Khmer-safe display filename
+      filename: f.filename, // actual saved filename on disk
       mimetype: f.mimetype,
       size: f.size,
       path: `${webPrefix}/${f.filename}`.replace(/\\/g, "/"), // public path if needed
@@ -279,6 +279,48 @@ router.post("/", upload.array("files"), async (req, res, next) => {
     next(e);
   }
 });
+
+/* -------------------------------------------------------------------------- */
+/*                         UPDATE STAGE (and history)                         */
+/* -------------------------------------------------------------------------- */
+async function updateStageHandler(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { stage, note, at } = req.body || {};
+
+    if (!stage || typeof stage !== "string") {
+      return res.status(400).json({ error: "stage is required" });
+    }
+
+    const doc = await Document.findById(id);
+    if (!doc) return res.status(404).json({ error: "Document not found" });
+
+    // Update current stage
+    doc.stage = stage.trim();
+
+    // For incoming flow, keep department aligned with stage
+    if (doc.sourceType === "incoming") {
+      doc.department = doc.stage;
+    }
+
+    // Append to history (de-duped to minute)
+    doc.history = pushDedupe(
+      Array.isArray(doc.history) ? doc.history : [],
+      normalizedStep({
+        stage: doc.stage,
+        at: at ? new Date(at) : new Date(),
+        note: note || "",
+      })
+    );
+
+    await doc.save();
+    res.json(doc);
+  } catch (err) {
+    next(err);
+  }
+}
+router.put("/:id/stage", updateStageHandler);
+router.patch("/:id/stage", updateStageHandler);
 
 /* -------------------------------------------------------------------------- */
 /*                               UPDATE + files                               */
